@@ -10,6 +10,7 @@ import pytest
 @pytest.fixture
 def app():
     from fastapi import FastAPI
+
     from bigpickle.main import create_app
 
     app: FastAPI = create_app()

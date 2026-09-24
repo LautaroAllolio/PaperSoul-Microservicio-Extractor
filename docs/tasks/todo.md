@@ -11,15 +11,15 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Description:** Crear el proyecto Python 3.12 con `uv` (`pyproject.toml`, `.python-version`, `.venv`), el paquete `src/bigpickle/` con los directorios `presentation/`, `application/`, `infrastructure/` vacíos, `main.py` con app factory mínima, y `infrastructure/config/settings.py` (pydantic-settings, prefijo `BIGPICKLE_`) con todas las variables de la sección 7 del plan.
 
 **Acceptance criteria:**
-- [ ] `uv sync` instala sin errores; `bigpickle` es importable desde `src/` (editable).
-- [ ] `main.py` levanta una FastAPI app vacía con `GET /` de prueba respondiendo `200`.
-- [ ] `Settings` carga desde entorno con defaults correctos (url del Extractor, límites de tamaño/timeout, pool).
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` pasan en limpio.
+- [x] `uv sync` instala sin errores; `bigpickle` es importable desde `src/` (editable).
+- [x] `main.py` levanta una FastAPI app vacía con `GET /` de prueba respondiendo `200`.
+- [x] `Settings` carga desde entorno con defaults correctos (url del Extractor, límites de tamaño/timeout, pool).
+- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` pasan en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest` (test básico de arranque de app/settings).
-- [ ] Build succeeds: `uv run uvicorn bigpickle.main:app --app-dir src` inicia y responde.
-- [ ] Manual check: `python -c "from bigpickle.main import create_app"` sin errores.
+- [x] Tests pass: `uv run pytest` (test básico de arranque de app/settings).
+- [x] Build succeeds: `uv run uvicorn bigpickle.main:app --app-dir src` inicia y responde.
+- [x] Manual check: `python -c "from bigpickle.main import create_app"` sin errores.
 
 **Dependencies:** None
 
