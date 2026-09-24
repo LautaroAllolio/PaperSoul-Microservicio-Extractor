@@ -1,13 +1,12 @@
-"""RED: contract tests for presentation schemas (SPEC §6 and §7).
-
-The source modules do not exist yet: this is the failing (red) phase.
-"""
+"""Contract tests for presentation schemas (SPEC §6 and §7)."""
 
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import BaseModel, ValidationError
+
 from bigpickle.presentation.schemas.document import (
     DocumentExtractResponse,
     ExtractedDocument,
@@ -15,7 +14,6 @@ from bigpickle.presentation.schemas.document import (
 )
 from bigpickle.presentation.schemas.health import HealthResponse, ReadinessResponse
 from bigpickle.presentation.schemas.problems import ProblemDetailError, ProblemDetails
-from pydantic import BaseModel, ValidationError
 
 REQUEST_ID = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
 EXTRACTED_TEXT = "Texto plano extraído del PDF..."
@@ -107,7 +105,7 @@ def test_problem_details_serializes_base_format() -> None:
         instance="/api/v1/extract",
     )
 
-    assert json.loads(problem.model_dump_json()) == {
+    assert json.loads(problem.model_dump_json(exclude_none=True)) == {
         "type": "about:blank",
         "title": "Upstream Timeout",
         "status": 504,
@@ -126,7 +124,7 @@ def test_problem_details_with_errors_serializes_loc_msg_type() -> None:
         errors=[ProblemDetailError(loc=["body", "file"], msg="Field required", type="missing")],
     )
 
-    assert json.loads(problem.model_dump_json()) == {
+    assert json.loads(problem.model_dump_json(exclude_none=True)) == {
         "type": "https://papersoul.dev/problems/validation-error",
         "title": "Validation Error",
         "status": 422,

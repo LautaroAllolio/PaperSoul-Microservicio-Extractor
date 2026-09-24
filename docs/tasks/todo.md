@@ -38,15 +38,15 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Description:** Implementar los DTOs de salida (`ExtractedDocument`, `OrchestrationMetadata`, `DocumentExtractResponse`, `HealthResponse`, `ReadinessResponse`) en `presentation/schemas/` y el modelo `ProblemDetails`/`ProblemDetailError`. Implementar los 4 handlers globales de error en `presentation/errors/handlers.py` que traducen a `application/problem+json`: validation (Pydantic), `HTTPException`, excepciones de dominio, y excepción genérica — todos con el sufijo `type` del mapa §8.1.
 
 **Acceptance criteria:**
-- [ ] Schemas validan/duplican exactamente los contratos JSON de la SPEC §6-§7 (tests de serialización).
-- [ ] `RequestValidationError` → `422 validation-error` con array `errors` (loc/msg/type).
-- [ ] `HTTPException` y excepción genérica → `problem+json` con `status` correcto.
-- [ ] Handlers mapean cada excepción de dominio (aún sin implementar) desde `status`+`problem_type` que expone la excepción.
+- [x] Schemas validan/duplican exactamente los contratos JSON de la SPEC §6-§7 (tests de serialización).
+- [x] `RequestValidationError` → `422 validation-error` con array `errors` (loc/msg/type).
+- [x] `HTTPException` y excepción genérica → `problem+json` con `status` correcto.
+- [x] Handlers mapean cada excepción de dominio (aún sin implementar) desde `status`+`problem_type` que expone la excepción.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/unit/test_schemas.py tests/unit/test_problems.py`.
-- [ ] Manual check: POST inválido a la app devuelve body RFC 9457 completo.
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [x] Tests pass: `uv run pytest tests/unit/test_schemas.py tests/unit/test_problems.py`.
+- [x] Manual check: POST inválido a la app devuelve body RFC 9457 completo. *(verificado: `HTTPException` vivo → `application/problem+json`; `RequestValidationError`/dominio/genérico cubiertos por tests; body endpoint completo a partir de Task 6)*
+- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
 
 **Dependencies:** Task 1
 
@@ -59,8 +59,8 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Estimated scope:** Medium (4-5 archivos).
 
 ### Checkpoint A (tras Tasks 1-2)
-- [ ] `uv sync` limpio; schemas compilan y serializan según SPEC.
-- [ ] Mapa RFC 9457 cubierto por tests de handler.
+- [x] `uv sync` limpio; schemas compilan y serializan según SPEC.
+- [x] Mapa RFC 9457 cubierto por tests de handler.
 - [ ] Review con humano antes de seguir.
 
 ---

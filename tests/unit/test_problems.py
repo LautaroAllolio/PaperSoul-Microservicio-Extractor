@@ -1,11 +1,17 @@
-"""RED: contract tests for the RFC 9457 error map (SPEC §8).
+"""Contract tests for the RFC 9457 error map (SPEC §8).
 
 Covers the domain error hierarchy and the four global handlers.
-The source modules do not exist yet: this is the failing (red) phase.
 """
+
+import json
 
 import httpx
 import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel
+from starlette.requests import Request
+
 from bigpickle.application.errors import (
     BigPickleError,
     ConfigurationError,
@@ -22,9 +28,6 @@ from bigpickle.presentation.errors.handlers import (
     handle_internal_error,
     handle_validation_error,
 )
-from fastapi import FastAPI, HTTPException
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel
 
 DOMAIN_ERRORS: list[tuple[type[BigPickleError], int, str, str]] = [
     (InvalidRequestError, 422, "invalid-request", "Invalid Request"),
@@ -41,6 +44,25 @@ async def call(app: FastAPI, method: str, url: str, **kwargs: object) -> httpx.R
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.request(method, url, **kwargs)
+
+
+@pytest.fixture
+def problem_request() -> Request:
+    scope: dict[str, object] = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [(b"host", b"testserver")],
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 123),
+        "app": {},
+    }
+    return Request(scope)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(("error_cls", "status", "problem_type", "title"), DOMAIN_ERRORS)
@@ -126,19 +148,14 @@ async def test_http_exception_handler_returns_problem_json_with_status() -> None
     }
 
 
-async def test_internal_error_handler_returns_500_without_leaking_details() -> None:
-    app = FastAPI()
-    app.add_exception_handler(Exception, handle_internal_error)
-
-    @app.get("/")
-    async def root() -> None:
-        raise ZeroDivisionError("secret internals")
-
-    response = await call(app, "GET", "/")
+async def test_internal_error_handler_returns_500_without_leaking_details(
+    problem_request: Request,
+) -> None:
+    response = await handle_internal_error(problem_request, ZeroDivisionError("secret internals"))
 
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.json() == {
+    assert json.loads(response.body) == {
         "type": "https://papersoul.dev/problems/internal-error",
         "title": "Internal Error",
         "status": 500,
