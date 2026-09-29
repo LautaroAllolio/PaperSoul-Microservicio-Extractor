@@ -72,22 +72,25 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Description:** Implementar `infrastructure/http/streaming.py`: el adapter `SourceForwardingStream(httpx.AsyncByteStream)` que itera una `AsyncByteSource` en chunks de 64 KB, expone `get_content_length()` (devuelto desde el `Content-Length` entrante o `None` → chunked), y aborta con `PayloadTooLargeError` al superar `BIGPICKLE_MAX_UPLOAD_BYTES`, sin buffering del archivo. Escribir primero la prueba de humo R1: verificar de forma empírica que httpx envía async byte streams con length correcto.
 
 **Acceptance criteria:**
-- [ ] El iterador emite exactamente los bytes recibidos, en orden, sin duplicaciones ni pérdidas (test byte-identical unitario).
-- [ ] `get_content_length()` devuelve el length entrante o `None`.
-- [ ] Guard: al exceder el límite se eleva `PayloadTooLargeError` durante la iteración (test con fuente de > límite).
-- [ ] No se escribe a disco en ningún punto (test de monkeypatch de ruta de escritura).
+- [x] El iterador emite exactamente los bytes recibidos, en orden, sin duplicaciones ni pérdidas (test byte-identical unitario).
+- [x] `get_content_length()` devuelve el length entrante o `None`.
+- [x] Guard: al exceder el límite se eleva `PayloadTooLargeError` durante la iteración (test con fuente de > límite).
+- [x] No se escribe a disco en ningún punto (test de monkeypatch de ruta de escritura).
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/unit/test_streaming.py`.
-- [ ] Manual/R1: prueba de humo con `httpx.AsyncClient` contra `ASGITransport` verificando un request body streamed con y sin `Content-Length`.
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [x] Tests pass: `uv run pytest tests/unit/test_streaming.py` (15 passed; suite completa 45 passed).
+- [x] Manual/R1: prueba de humo con `httpx.AsyncClient` contra `ASGITransport` verificando un request body streamed con y sin `Content-Length`.
+- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada. `ruff format --check` limpio en `src/` y `tests/`; los 2 `.md` de `docs/` con diferencias de format son preexistentes y se limpian en T9)*
+
+**Hallazgo R1 (resuelto empíricamente con httpx 0.28.1):** httpx **no** consulta `get_content_length()` sobre `AsyncByteStream`; para cualquier async iterable fuerza `Transfer-Encoding: chunked`. El `Content-Length` solo llega al cable si el **caller** setea el header — y entonces httpx descarta su propio `Transfer-Encoding` (`Request._prepare`). Consecuencia para D5/T4: `HttpExtractorClient` debe pasar `Content-Length: str(stream.get_content_length())` explícitamente cuando no sea `None`; `get_content_length()` queda como API del adapter, no como hook de httpx. Ambos caminos (con length y chunked) quedaron verificados byte a byte.
 
 **Dependencies:** Task 1
 
 **Files likely touched:**
-- `src/bigpickle/infrastructure/http/streaming.py`
-- `src/bigpickle/application/interfaces.py` (`AsyncByteSource`)
-- `src/bigpickle/application/errors.py` (`PayloadTooLargeError`)
+- `src/bigpickle/infrastructure/http/streaming.py` → `SourceForwardingStream` + guard de tamaño (`_SizeGuard`)
+- `src/bigpickle/infrastructure/http/__init__.py` (nuevo, paquete)
+- `src/bigpickle/application/interfaces.py` (`AsyncByteSource`, `ExtractionResult`, `ExtractionService`)
+- `src/bigpickle/application/errors.py` (`PayloadTooLargeError` — ya existía de T2, sin cambios)
 - `tests/unit/test_streaming.py`
 
 **Estimated scope:** Medium (2-3 archivos). Alto riesgo → temprano (R1/R2).
@@ -145,7 +148,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Estimated scope:** Medium (3 archivos).
 
 ### Checkpoint B (tras Tasks 3-5)
-- [ ] Streaming con guard verificado por tests; Prueba de humo R1 resuelta.
+- [x] Streaming con guard verificado por tests; Prueba de humo R1 resuelta. *(T3)*
 - [ ] Cliente traduce todos los errores del Extractor a excepciones de dominio.
 - [ ] Orquestador produce `ExtractionResult` end-to-end con fake.
 - [ ] Review con humano del diseño de streaming antes de exponer endpoints.

@@ -347,7 +347,7 @@ Orden de construcción (dependencias hacia abajo; alto riesgo primero):
 
 | # | Riesgo | Impacto | Mitigación |
 |---|---|---|---|
-| R1 | httpx stream + `Content-Length` con body async no se comporta como se espera (`AsyncByteStream.get_content_length`) | Med | T3/T4 escriben primero una prueba de humo; si falla, fallback chunked (sin length) — comportamiento equivalente para el Extractor. |
+| R1 | httpx stream + `Content-Length` con body async no se comporta como se espera (`AsyncByteStream.get_content_length`) | Med | T3/T4 escriben primero una prueba de humo; si falla, fallback chunked (sin length) — comportamiento equivalente para el Extractor. **Resuelto en T3 (httpx 0.28.1):** httpx nunca consulta `get_content_length()`; fuerza `Transfer-Encoding: chunked` salvo que el caller setee `Content-Length`, caso en el que httpx descarta su propio `Transfer-Encoding`. El cliente (T4) debe setear el header explícitamente. Ambos caminos verificados byte a byte. |
 | R2 | Proxies/balancers intermedios bufferizan request chunked (nginx `proxy_request_buffering on`) | Med | Documentación de despliegue: `proxy_request_buffering off`; `Content-Length` forwards cuando existe (D5) evita chunked en la mayoría de casos. |
 | R3 | Errores a mitad de stream (cliente corta / guard de tamaño) dejan estados parciales downstream | Med | El guard aborta el iterador → httpx cierra la conexión; el Extractor rechaza cuerpos truncados (sigue siendo su cobertura). Tests de corte a mitad de flujo. |
 | R4 | Timeout de lectura demasiado corto con PDFs lentos | Med | Read timeout configurable (120 s default, sección 7); `duration_ms` y logging permiten calibrar. |
@@ -362,6 +362,6 @@ Orden de construcción (dependencias hacia abajo; alto riesgo primero):
 
 1. Renombrar repo / README (actualmente dice "Extractor").
 2. MIME whitelist: ¿solo `application/pdf` o cualquier contenido?
-3. Confirmar comportamiento exacto de httpx/Uvicorn con chunked (se resuelve en T3/T4, riesgos R1/R2).
+3. Confirmar comportamiento exacto de httpx/Uvicorn con chunked. *(resuelto en T3 — ver R1; falta solo confirmarlo contra un Uvicorn real, no contra `ASGITransport`)*
 4. Auth y rate limiting en fase posterior.
 5. Métricas Prometheus: ¿ahora o después?
