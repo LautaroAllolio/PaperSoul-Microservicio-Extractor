@@ -61,7 +61,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 ### Checkpoint A (tras Tasks 1-2)
 - [x] `uv sync` limpio; schemas compilan y serializan según SPEC.
 - [x] Mapa RFC 9457 cubierto por tests de handler.
-- [ ] Review con humano antes de seguir.
+- [x] Review con humano antes de seguir.
 
 ---
 
