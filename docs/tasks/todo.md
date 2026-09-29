@@ -102,21 +102,34 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Description:** Implementar `infrastructure/http/downstream/`: `base.py` (ABC `ExtractorClient` con `forward()` y `ping()`), `models.py` (records crudos `ExtractorSuccess`, `ExtractorError` con `error: str`), y `http_client.py` con la implementación real: `AsyncClient` con pool y timeouts por fase desde settings; `forward()` emite `POST {BASE}/api/v1/extract` con `content=SourceForwardingStream` y headers `Content-Type`, `Content-Length` (si hay), `X-Request-Id`; traduce respuestas del Extractor a excepciones de dominio (422→`ExtractionFailedError`, 5xx→`UpstreamError`, timeout→`UpstreamTimeoutError`, refused/DNS→`UpstreamUnavailableError`, respuestas con shape inesperado→`UpstreamError`). `ping()` para readiness.
 
 **Acceptance criteria:**
-- [ ] `forward()` envía exactamente el source dado y devuelve `ExtractorSuccess` en `200`.
-- [ ] Cada error downstream (422/500/timeout/refused/shape inválido) produce la excepción de dominio correcta (tabla §9.3 SPEC).
-- [ ] El `detail` propagado usa solo el mensaje `{error}` del Extractor; nunca loguea ni reenvía el cuerpo completo a cliente.
-- [ ] `ping()` lanza `UpstreamUnavailableError` solo en fallas de red; cualquier status HTTP = reachable.
+- [x] `forward()` envía exactamente el source dado y devuelve `ExtractorSuccess` en `200`.
+- [x] Cada error downstream (422/500/timeout/refused/shape inválido) produce la excepción de dominio correcta (tabla §9.3 SPEC).
+- [x] El `detail` propagado usa solo el mensaje `{error}` del Extractor; nunca loguea ni reenvía el cuerpo completo a cliente.
+- [x] `ping()` lanza `UpstreamUnavailableError` solo en fallas de red; cualquier status HTTP = reachable.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/unit` (incl. tests nuevos del cliente con `respx`).
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [x] Tests pass: `uv run pytest tests/unit` (incl. tests nuevos del cliente con `respx`). *(RED: 76 tests en `tests/unit/test_http_client.py`; la colección falla con `ModuleNotFoundError: bigpickle.infrastructure.http.downstream` hasta que exista el código de producción)*
+- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(sobre el paquete y la suite RED; `ruff format --check src tests` limpio)*
+
+**Estado:** 🔴 RED. Test suite escrito y verificado mecánicamente (los 76 tests colectan y fallan solo por assertions, sin errores de fixture ni de mocks) contra stubs desechables fuera del repo. Falta la fase GREEN.
+
+**Contrato fijado por los tests (decisiones que la descripción de la Task no explicaba):**
+- **Firma:** `HttpExtractorClient(settings)` + `await aclose()`; `forward(source, *, content_type, content_length, request_id) -> ExtractorSuccess` y `ping() -> None` (plan §5.2). El cliente construye internamente el `SourceForwardingStream` con `max_upload_bytes` de settings (de ahí que `forward` reciba la `source`, no el stream).
+- **`Content-Length`:** el cliente debe setear el header explícitamente cuando `content_length` no sea `None`, y omitirlo cuando sea `None` (httpx cae a `Transfer-Encoding: chunked`). Consecuencia directa del hallazgo R1 de T3.
+- **Traducción:** `httpx.TimeoutException` (cualquier subtype) → `UpstreamTimeoutError`; el resto de `httpx.RequestError` de red → `UpstreamUnavailableError`. `4xx` → `ExtractionFailedError` (cualquier `4xx`, no solo `422`: lo exige D4 y es la única excepción de dominio 4xx) y `5xx` → `UpstreamError`. `PayloadTooLargeError` del guard se propaga sin re-clasificar.
+- **Status inesperados:** cualquier status que no sea `200` (201/202/204/302…) → `UpstreamError`; solo `200` es éxito.
+- **`detail`:** es exactamente el string de `{"error": …}` del Extractor. Si el body no lo trae, se usa un mensaje controlado — nunca el body crudo (verificado con un canario en el payload).
+- **Tolerancia a evolución:** `ExtractorSuccess.from_payload` exige los 3 campos del SPEC §9.2 con su tipo, pero **ignora** campos extra (el Extractor puede evolucionar sin romper el contrato, coherente con D2).
+- **Modelos:** `ExtractorSuccess`/`ExtractorError` son records frozen con `from_payload()`classmethod que valida el shape crudo y levanta `ValueError`; la traducción a excepción de dominio es responsabilidad exclusiva del cliente (SRP).
+- **D6:** exactamente 1 llamada downstream por `forward()`, incluso ante `5xx` (sin reintentos).
+- **`ping()`:** sondea `GET {BASE}/health` y colapsa **toda** falla de red —incluido timeout— a `UpstreamUnavailableError` (SPEC §6.3), a diferencia de `forward()`, que distingue timeout vs. inalcanzable.
 
 **Dependencies:** Task 1, Task 3
 
 **Files likely touched:**
-- `src/bigpickle/infrastructure/http/downstream/{base,models,http_client}.py`
-- `src/bigpickle/application/errors.py` (excepciones de dominio completas)
-- `src/bigpickle/infrastructure/config/settings.py` (timeouts/pool)
+- `src/bigpickle/infrastructure/http/downstream/{__init__,base,models,http_client}.py`
+- `src/bigpickle/application/errors.py` (excepciones de dominio — ya completas de T2, sin cambios)
+- `src/bigpickle/infrastructure/config/settings.py` (timeouts/pool — ya completos de T1, sin cambios)
 - `tests/unit/test_http_client.py`
 
 **Estimated scope:** Medium (4-5 archivos).
