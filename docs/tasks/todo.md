@@ -108,21 +108,30 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 - [x] `ping()` lanza `UpstreamUnavailableError` solo en fallas de red; cualquier status HTTP = reachable.
 
 **Verification:**
-- [x] Tests pass: `uv run pytest tests/unit` (incl. tests nuevos del cliente con `respx`). *(RED: 76 tests en `tests/unit/test_http_client.py`; la colección falla con `ModuleNotFoundError: bigpickle.infrastructure.http.downstream` hasta que exista el código de producción)*
-- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(sobre el paquete y la suite RED; `ruff format --check src tests` limpio)*
+- [x] Tests pass: `uv run pytest tests/unit` (incl. tests nuevos del cliente con `respx`). *(GREEN: 78 tests en `tests/unit/test_http_client.py`; suite completa del proyecto 123 passed)*
+- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(sobre el paquete y la suite; `ruff format --check src tests` limpio)*
 
-**Estado:** 🔴 RED. Test suite escrito y verificado mecánicamente (los 76 tests colectan y fallan solo por assertions, sin errores de fixture ni de mocks) contra stubs desechables fuera del repo. Falta la fase GREEN.
+**Estado:** 🟢 GREEN. `downstream/{__init__,base,models,http_client}.py` implementados. `errors.py` y `settings.py` no requirieron cambios: la jerarquía de dominio (T2) y los timeouts/pool (T1) ya cubrían el contrato.
 
 **Contrato fijado por los tests (decisiones que la descripción de la Task no explicaba):**
 - **Firma:** `HttpExtractorClient(settings)` + `await aclose()`; `forward(source, *, content_type, content_length, request_id) -> ExtractorSuccess` y `ping() -> None` (plan §5.2). El cliente construye internamente el `SourceForwardingStream` con `max_upload_bytes` de settings (de ahí que `forward` reciba la `source`, no el stream).
-- **`Content-Length`:** el cliente debe setear el header explícitamente cuando `content_length` no sea `None`, y omitirlo cuando sea `None` (httpx cae a `Transfer-Encoding: chunked`). Consecuencia directa del hallazgo R1 de T3.
-- **Traducción:** `httpx.TimeoutException` (cualquier subtype) → `UpstreamTimeoutError`; el resto de `httpx.RequestError` de red → `UpstreamUnavailableError`. `4xx` → `ExtractionFailedError` (cualquier `4xx`, no solo `422`: lo exige D4 y es la única excepción de dominio 4xx) y `5xx` → `UpstreamError`. `PayloadTooLargeError` del guard se propaga sin re-clasificar.
+- **`Content-Length`:** el cliente debe setear el header explícitamente cuando `content_length` no sea `None`, y omitirlo cuando sea `None` (httpx cae a `Transfer-Encoding: chunked`). Consecuencia directa del hallazgo R1 de T3. Aislado en `_build_headers()`.
+- **`base_url` con slash final:** normalizado con `rstrip("/")`; sin eso, `BIGPICKLE_EXTRACTOR_BASE_URL=http://extractor:8000/` produce `//api/v1/extract` y httpx **no** normaliza (cubierto por `test_forward_does_not_duplicate_the_path_separator`, añadido en ciclo red→green durante el GREEN).
+- **Traducción:** `httpx.TimeoutException` (cualquier subtype) → `UpstreamTimeoutError`; el resto de `httpx.RequestError` de red → `UpstreamUnavailableError`. `4xx` → `ExtractionFailedError` (cualquier `4xx`, no solo `422`: lo exige D4 y es la única excepción de dominio 4xx) y `5xx` → `UpstreamError`. `PayloadTooLargeError` del guard se propaga sin re-clasificar (no es `httpx.RequestError`, así que las cláusulas `except` no lo tocan).
 - **Status inesperados:** cualquier status que no sea `200` (201/202/204/302…) → `UpstreamError`; solo `200` es éxito.
 - **`detail`:** es exactamente el string de `{"error": …}` del Extractor. Si el body no lo trae, se usa un mensaje controlado — nunca el body crudo (verificado con un canario en el payload).
 - **Tolerancia a evolución:** `ExtractorSuccess.from_payload` exige los 3 campos del SPEC §9.2 con su tipo, pero **ignora** campos extra (el Extractor puede evolucionar sin romper el contrato, coherente con D2).
-- **Modelos:** `ExtractorSuccess`/`ExtractorError` son records frozen con `from_payload()`classmethod que valida el shape crudo y levanta `ValueError`; la traducción a excepción de dominio es responsabilidad exclusiva del cliente (SRP).
+- **Modelos:** `ExtractorSuccess`/`ExtractorError` son dataclasses frozen con `from_payload()`classmethod que valida el shape crudo y levanta `ValueError`; la traducción a excepción de dominio es responsabilidad exclusiva del cliente (SRP).
 - **D6:** exactamente 1 llamada downstream por `forward()`, incluso ante `5xx` (sin reintentos).
 - **`ping()`:** sondea `GET {BASE}/health` y colapsa **toda** falla de red —incluido timeout— a `UpstreamUnavailableError` (SPEC §6.3), a diferencia de `forward()`, que distingue timeout vs. inalcanzable.
+
+**Desviación menor respecto del plan:** el diagrama §6 muestra `httpx.stream("POST", …)`; la implementación usa `client.post(…)`. Con `content=<AsyncByteStream>` httpx streamea el body igual en ambos casos, y `post()` evita el context manager extra. El body de *respuesta* sí se bufferiza, que es lo permitido explícitamente por §6.1 ("el cuerpo de respuesta (JSON del Extractor) es pequeño y se bufferiza en RAM").
+
+**Correcciones aplicadas a los propios tests RED (2 bugs encontrados al ejecutar GREEN):**
+1. `test_forward_never_leaks_the_raw_downstream_body` usaba el mismo canario en `error` (que SPEC §9.3 **sí** propaga) y en los campos que no, así que la aserción contradecía el contrato. Separado: canario solo en posiciones prohibidas + 2 casos extra.
+2. `test_forward_sends_the_source_bytes_byte_identical` usaba un payload 3× mayor que `max_upload_bytes` (disparaba el guard que el propio test exige) y, al estar por debajo de 64 KB, nunca cruzaba una frontera de chunk. Reescrito con un cliente de `max_upload_bytes` propio y un payload de `2*64KB+1`, que sí ejercita el reassamblado multi-chunk.
+
+**Medición para T6/T8 (coste real, no un defecto de diseño):** construir un `httpx.AsyncClient()` cuesta ~163 ms y `aclose()` ~58 ms en este entorno (carga del CA store por instancia). Son ~220 ms de overhead por test → la suite unit aria de 78 tests tarda ~11 s. En producción es un coste único de arranque (el lifespan debe crear **un** cliente y reutilizarlo — que es justamente el objetivo de D7), pero conviene tenerlo presente al añadir suites en T8.
 
 **Dependencies:** Task 1, Task 3
 
@@ -162,7 +171,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 ### Checkpoint B (tras Tasks 3-5)
 - [x] Streaming con guard verificado por tests; Prueba de humo R1 resuelta. *(T3)*
-- [ ] Cliente traduce todos los errores del Extractor a excepciones de dominio.
+- [x] Cliente traduce todos los errores del Extractor a excepciones de dominio. *(T4)*
 - [ ] Orquestador produce `ExtractionResult` end-to-end con fake.
 - [ ] Review con humano del diseño de streaming antes de exponer endpoints.
 

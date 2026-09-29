@@ -6,6 +6,7 @@ fail until the production code is implemented.
 """
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -40,6 +41,7 @@ SUCCESS_PAYLOAD: dict[str, Any] = {
     "page_count": 4,
 }
 CANARY = "SECRET-CANARY-must-never-reach-the-client"
+DEFAULT_CHUNK_SIZE = 64 * 1024
 
 
 class ByteSource:
@@ -83,9 +85,28 @@ def payload_of(size: int) -> bytes:
     return bytes(range(256)) * (size // 256) + b"%" * (size % 256)
 
 
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "extractor_base_url": BASE_URL,
+    "max_upload_bytes": MAX_UPLOAD_BYTES,
+}
+
+
+def build_client(**overrides: Any) -> HttpExtractorClient:
+    return HttpExtractorClient(Settings(**{**DEFAULT_SETTINGS, **overrides}))
+
+
+@asynccontextmanager
+async def extractor_client(**overrides: Any) -> AsyncIterator[HttpExtractorClient]:
+    http_client = build_client(**overrides)
+    try:
+        yield http_client
+    finally:
+        await http_client.aclose()
+
+
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(extractor_base_url=BASE_URL, max_upload_bytes=MAX_UPLOAD_BYTES)
+    return Settings(**DEFAULT_SETTINGS)
 
 
 @pytest.fixture
@@ -219,13 +240,12 @@ async def test_forward_posts_to_the_extractor_extract_endpoint(
 
 async def test_forward_sends_the_source_bytes_byte_identical(
     respx_mock: respx.MockRouter,
-    client: HttpExtractorClient,
 ) -> None:
     recorder = Recorder()
     mock_extract(respx_mock, recorder)
-    payload = payload_of(MAX_UPLOAD_BYTES * 3)
-
-    await forward(client, ByteSource(payload), content_length=len(payload))
+    payload = payload_of(2 * DEFAULT_CHUNK_SIZE + 1)
+    async with extractor_client(max_upload_bytes=len(payload)) as http_client:
+        await forward(http_client, ByteSource(payload), content_length=len(payload))
 
     assert recorder.body == payload
 
@@ -440,7 +460,8 @@ async def test_forward_uses_the_extractor_error_message_as_detail(
 @pytest.mark.parametrize(
     ("status_code", "payload"),
     [
-        (500, {"error": CANARY, "trace": CANARY}),
+        (500, {"error": EXTRACTOR_ERROR_MESSAGE, "trace": CANARY, "stack": CANARY}),
+        (422, {"error": EXTRACTOR_ERROR_MESSAGE, "debug": CANARY}),
         (422, {"detail": CANARY}),
         (200, {"extracted_text": CANARY, "extraction_method": CANARY, "page_count": "not-an-int"}),
         (200, {"error": CANARY}),
@@ -479,6 +500,18 @@ async def test_ping_returns_none_when_the_extractor_answers(
     respx_mock.get(HEALTH_URL).mock(return_value=httpx.Response(200, json={"status": "ok"}))
 
     assert await client.ping() is None
+
+
+async def test_forward_does_not_duplicate_the_path_separator(
+    respx_mock: respx.MockRouter,
+) -> None:
+    recorder = Recorder()
+    mock_extract(respx_mock, recorder)
+    payload = payload_of(256)
+    async with extractor_client(extractor_base_url=f"{BASE_URL}/") as http_client:
+        await forward(http_client, ByteSource(payload), content_length=len(payload))
+
+    assert recorder.url == EXTRACT_URL
 
 
 async def test_ping_probes_the_extractor_health_endpoint(
