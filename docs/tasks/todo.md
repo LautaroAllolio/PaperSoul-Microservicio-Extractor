@@ -149,30 +149,67 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 **Description:** Definir `ExtractionService` (Protocol) en `application/interfaces.py` e implementar `ExtractionOrchestrator` en `application/services/orchestrator.py`: generar `request_id`, medir `duration_ms`, construir `SourceForwardingStream` sobre la fuente recibida, llamar al `ExtractorClient.forward()` inyectado, y devolver `ExtractionResult` (`extracted_text`, `page_count`, `extraction_method`, `duration_ms`). No conoce HTTP ni DTOs de presentación.
 
+> ⚠️ **Corrección al RED (no seguir el paso 3 a ciegas).** "Construir `SourceForwardingStream` sobre la fuente recibida" es imposible y está desmentido por ejecución real: `forward()` recibe una `AsyncByteSource` y `SourceForwardingStream` no implementa `read()`/`close()`. El orquestador reenvía la fuente intacta y el stream lo construye el cliente. Ver *Desviación respecto del plan* abajo.
+
 **Acceptance criteria:**
 - [ ] Orquesta correctamente usando el cliente inyectado (fake en tests); produce `ExtractionResult` completo.
 - [ ] Propaga las excepciones de dominio sin transformarlas (las traduce la presentación).
 - [ ] Registra `duration_ms` ≥ 0; `request_id` único por llamada.
 - [ ] Inyectable: el mismo código funciona con fake y con `HttpExtractorClient` real.
 
+**Cobertura de cada AC por los tests RED (21 tests en `tests/unit/test_orchestrator.py`):**
+- **AC1** → `test_orchestrator_returns_a_complete_extraction_result` (set exacto de 4 claves), `..._calls_the_injected_client_exactly_once`, `..._relays_the_source_untouched`, `..._relays_the_request_metadata`, `..._accepts_an_unknown_filename`.
+- **AC2** → `test_orchestrator_propagates_domain_errors_unchanged`, parametrizado sobre las **7** excepciones de `errors.py`, afirmando identidad (`caught.value is error`), no solo el tipo.
+- **AC3** → `..._measures_duration_ms` (fake con `delay=0.05` ⇒ `>= 50 ms`, prueba que se *mide* y no se hardcodea), `..._reports_a_non_negative_integer_duration` (descarta `bool`), `..._generates_a_fresh_uuid4_request_id_per_call`, `..._delegates_request_id_generation_to_the_injected_factory`.
+- **AC4** → `..._composes_with_the_real_http_client` y `..._surfaces_real_downstream_failures_as_domain_errors`, ambos con `HttpExtractorClient` real sobre `respx` (no fake).
+- **Inyección obligatoria** → `..._requires_a_request_id_factory`.
+- **Capa** → `..._never_imports_http_or_concrete_infrastructure`.
+
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/unit/test_orchestrator.py`.
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [ ] Tests pass: `uv run pytest tests/unit/test_orchestrator.py`. *(RED: la colección falla con `ModuleNotFoundError: No module named 'bigpickle.application.services'`, que es el RED esperado; el resto de la suite sigue en 123 passed)*
+- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(se validan en GREEN)*
+
+**Estado:** 🔴 RED. `tests/unit/test_orchestrator.py` escrito y verificado mecánicamente; `application/services/orchestrator.py` e `infrastructure/tracing.py` **no existen todavía** a propósito.
+
+**Contrato fijado por los tests (decisiones que la descripción de la Task no explicaba):**
+- **Firma:** `ExtractionOrchestrator(client=…, new_request_id=…)`, ambos **inyectados y obligatorios**; `async extract(source, *, filename, content_type, content_length) -> ExtractionResult`. Coincide con el Protocol `ExtractionService` que ya fijó T3, así que el GREEN solo necesita añadirle `@runtime_checkable` para poder verificar `isinstance` (test `..._satisfies_the_extraction_service_port`).
+- **`new_request_id` inyectado, no importado:** la DIP manda sobre la conveniencia. La *interfaz* de cliente (`ExtractorClient`, ABC) sí está permitido importarla desde infraestructura —el propio plan §3 autoriza a la capa de aplicación conocer "infraestructura (interfaces de cliente)"—, pero `tracing.new_request_id` es una función concreta, y el orquestador no debe resolver por su cuenta ni el reloj ni el generador de ids. El cableado lo hará `deps.py` en T6. Beneficio comprobable: el test verifica que la fábrica inyectada se invoca **una vez por extracción** y que su valor llega al cliente.
+- **La fuente se reenvía intacta; el orquestador NO construye el `SourceForwardingStream`.** La descripción de la Task pide lo contrario, pero es imposible: `forward()` (fijado en T4) recibe una `AsyncByteSource`, y `SourceForwardingStream` **no tiene `read()`/`close()`**, luego no satisface el port (verificado en runtime). Construir el stream es tarea del cliente, que es quien posee `max_upload_bytes`.
+- **`filename` se acepta y no se usa:** `ExtractorService` lo expone (SPEC §6.1) pero §9.1 no manda ningún header de filename, así que no hay contrato de reenvío. Se cubre el fallback documentado `filename=""` (nota al pie de plan §6.1) sin afirmar un reenvío que el SPEC no define.
+- **`ExtractionResult` es un `TypedDict`**, así que los tests acceden con `result["…"]`, nunca con atributo.
+- **Test de arquitectura por AST:** `imported_modules()` parsea el módulo del orquestador y afirma que no importa `httpx`, `fastapi`, `…http.streaming` ni `…downstream.http_client`, y que **sí** importa `…downstream.base`. Cumplimiento ejecutable del "Nunca conoce de: FastAPI, HTTP, transporte" de plan §3, no una aspiración del docstring.
+
+**Desviación respecto del plan (justificada empíricamente, no por gusto):**
+El paso "construir `SourceForwardingStream` sobre la fuente recibida" de la descripción de T5 es incompatible con el contrato ya implementado y testeado en T4. La prueba `test_orchestrator_composes_with_the_real_http_client` lo demuestra: con el orquestador envolviendo la fuente, la ejecución real revienta con `AttributeError: 'SourceForwardingStream' object has no attribute 'read'` / `… has no attribute 'close'. Did you mean: 'aclose'?`. Por eso el contrato fija reenvío directo de la fuente. Además, envolver en la capa de aplicación filtraría un detalle de transporte (httpx `AsyncByteStream`) hacia arriba, violando la §3.
+
+**Validación de la calidad de los tests: mutation testing.** Un RED que solo verifica "falla" no demuestra que los tests sirvan. Con un stub naive temporal se comprobó que cada test muerde:
+
+| Mutante | Tests que lo matan |
+|---|---|
+| `duration_ms: 0` hardcodeado | 1 (`..._measures_duration_ms`) |
+| `request_id="req-fijo"` en vez de uuid4 por llamada | 3 (incluye el end-to-end real, que detecta el header `x-request-id`) |
+| Envuelve la fuente en `SourceForwardingStream` (lo que pide la Task al pie de la letra) | 5 (incluye el end-to-end real) |
+| Envuelve los errores de dominio en `RuntimeError` | 8 (los 7 casos parametrizados + el end-to-end real) |
+
+Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED real. Sin esta tabla, el GREEN podría haber "paseado" con una implementación que miente sobre la medición o sobre la propagación de errores.
+
+**Refactor DRY incluido en la fase RED:** `ByteSource` (el doble de `AsyncByteSource`) estaba duplicado en `test_streaming.py` y `test_http_client.py` y esta task habría creado la **tercera** copia. Se extrajo a `tests/fakes.py` (con `read_sizes` y `drain()` para verificar que un cuerpo reenviado sigue siendo byte-idéntico) y se añadieron `tests/__init__.py` + `pythonpath` para poder importarlo como `from tests.fakes import ByteSource`. Suite completa verificada tras el refactor: 123 passed.
 
 **Dependencies:** Task 3, Task 4
 
 **Files likely touched:**
-- `src/bigpickle/application/interfaces.py`
-- `src/bigpickle/application/services/orchestrator.py`
-- `src/bigpickle/infrastructure/tracing.py`
-- `tests/unit/test_orchestrator.py`
+- `src/bigpickle/application/interfaces.py` (añadir `@runtime_checkable` al Protocol)
+- `src/bigpickle/application/services/orchestrator.py` (+ `__init__.py`) — **aún no creado**
+- `src/bigpickle/infrastructure/tracing.py` — **aún no creado**
+- `tests/unit/test_orchestrator.py` — creado (RED)
+- `tests/fakes.py`, `tests/__init__.py` — refactor DRY
 
 **Estimated scope:** Medium (3 archivos).
 
 ### Checkpoint B (tras Tasks 3-5)
 - [x] Streaming con guard verificado por tests; Prueba de humo R1 resuelta. *(T3)*
 - [x] Cliente traduce todos los errores del Extractor a excepciones de dominio. *(T4)*
-- [ ] Orquestador produce `ExtractionResult` end-to-end con fake.
+- [ ] Orquestador produce `ExtractionResult` end-to-end con fake. *(RED hecho y validado por mutation testing; falta el GREEN)*
 - [ ] Review con humano del diseño de streaming antes de exponer endpoints.
 
 ---

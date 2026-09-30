@@ -24,6 +24,7 @@ from bigpickle.infrastructure.config.settings import Settings
 from bigpickle.infrastructure.http.downstream.base import ExtractorClient
 from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
 from bigpickle.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
+from tests.fakes import ByteSource
 
 BASE_URL = "http://extractor:8000"
 EXTRACT_PATH = "/api/v1/extract"
@@ -42,24 +43,6 @@ SUCCESS_PAYLOAD: dict[str, Any] = {
 }
 CANARY = "SECRET-CANARY-must-never-reach-the-client"
 DEFAULT_CHUNK_SIZE = 64 * 1024
-
-
-class ByteSource:
-    """In-memory ``AsyncByteSource`` fake."""
-
-    def __init__(self, data: bytes) -> None:
-        self._buffer = data
-        self.closed = False
-
-    async def read(self, size: int = -1) -> bytes:
-        if size < 0 or not self._buffer:
-            data, self._buffer = self._buffer, b""
-            return data
-        data, self._buffer = self._buffer[:size], self._buffer[size:]
-        return data
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 class Recorder:

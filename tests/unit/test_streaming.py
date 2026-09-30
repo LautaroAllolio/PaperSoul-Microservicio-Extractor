@@ -17,28 +17,9 @@ import pytest
 from bigpickle.application.errors import PayloadTooLargeError
 from bigpickle.application.interfaces import AsyncByteSource
 from bigpickle.infrastructure.http.streaming import SourceForwardingStream
+from tests.fakes import ByteSource
 
 DEFAULT_CHUNK_SIZE = 64 * 1024
-
-
-class ByteSource:
-    """In-memory ``AsyncByteSource`` fake that records reads and closes."""
-
-    def __init__(self, data: bytes) -> None:
-        self._buffer = data
-        self.closed = False
-        self.read_sizes: list[int] = []
-
-    async def read(self, size: int = -1) -> bytes:
-        self.read_sizes.append(size)
-        if size < 0 or not self._buffer:
-            data, self._buffer = self._buffer, b""
-            return data
-        data, self._buffer = self._buffer[:size], self._buffer[size:]
-        return data
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 def build_stream(
