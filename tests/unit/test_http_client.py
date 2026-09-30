@@ -24,7 +24,7 @@ from bigpickle.infrastructure.config.settings import Settings
 from bigpickle.infrastructure.http.downstream.base import ExtractorClient
 from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
 from bigpickle.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
-from tests.fakes import ByteSource
+from tests.fakes import ByteSource, DownstreamRecorder, payload_of
 
 BASE_URL = "http://extractor:8000"
 EXTRACT_PATH = "/api/v1/extract"
@@ -45,27 +45,14 @@ CANARY = "SECRET-CANARY-must-never-reach-the-client"
 DEFAULT_CHUNK_SIZE = 64 * 1024
 
 
-class Recorder:
-    """respx side effect that records the forwarded request and replays a canned reply."""
+def make_recorder(status_code: int = 200, payload: object = None) -> DownstreamRecorder:
+    """Recorder replaying the Spec §9.2 success payload unless told otherwise.
 
-    def __init__(self, status_code: int = 200, payload: object = None) -> None:
-        self._status_code = status_code
-        self._payload = SUCCESS_PAYLOAD if payload is None else payload
-        self.method: str | None = None
-        self.url: str | None = None
-        self.headers: dict[str, str] = {}
-        self.body: bytes = b""
-
-    async def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.method = request.method
-        self.url = str(request.url)
-        self.headers = dict(request.headers)
-        self.body = await request.aread()
-        return httpx.Response(self._status_code, json=self._payload)
-
-
-def payload_of(size: int) -> bytes:
-    return bytes(range(256)) * (size // 256) + b"%" * (size % 256)
+    The double itself lives in ``tests.fakes`` (it is also used by the Task 6
+    integration suite); the Spec payload stays here, next to the contract it
+    belongs to.
+    """
+    return DownstreamRecorder(status_code, SUCCESS_PAYLOAD if payload is None else payload)
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -101,13 +88,13 @@ async def client(settings: Settings) -> AsyncIterator[HttpExtractorClient]:
         await http_client.aclose()
 
 
-def mock_extract(respx_mock: respx.MockRouter, recorder: Recorder) -> None:
-    respx_mock.post(EXTRACT_URL).mock(side_effect=recorder)
+def mock_extract(respx_mock: respx.MockRouter, record: DownstreamRecorder) -> None:
+    respx_mock.post(EXTRACT_URL).mock(side_effect=record)
 
 
-def spec_error_recorder(status_code: int) -> Recorder:
+def spec_error_recorder(status_code: int) -> DownstreamRecorder:
     """Recorder replaying the Spec § 9.2 error payload for ``status_code``."""
-    return Recorder(status_code=status_code, payload={"error": EXTRACTOR_ERROR_MESSAGE})
+    return make_recorder(status_code=status_code, payload={"error": EXTRACTOR_ERROR_MESSAGE})
 
 
 async def forward(
@@ -212,84 +199,84 @@ async def test_forward_posts_to_the_extractor_extract_endpoint(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
 
     await forward(client, ByteSource(payload_of(1024)), content_length=1024)
 
-    assert recorder.method == "POST"
-    assert recorder.url == EXTRACT_URL
+    assert record.method == "POST"
+    assert record.url == EXTRACT_URL
 
 
 async def test_forward_sends_the_source_bytes_byte_identical(
     respx_mock: respx.MockRouter,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
     payload = payload_of(2 * DEFAULT_CHUNK_SIZE + 1)
     async with extractor_client(max_upload_bytes=len(payload)) as http_client:
         await forward(http_client, ByteSource(payload), content_length=len(payload))
 
-    assert recorder.body == payload
+    assert record.body == payload
 
 
 async def test_forward_forwards_the_original_content_type_with_boundary(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
 
     await forward(client, ByteSource(payload_of(256)), content_length=256)
 
-    assert recorder.headers["content-type"] == CONTENT_TYPE
+    assert record.headers["content-type"] == CONTENT_TYPE
 
 
 async def test_forward_propagates_the_request_id_header(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
 
     await forward(client, ByteSource(payload_of(256)), content_length=256, request_id=REQUEST_ID)
 
-    assert recorder.headers["x-request-id"] == REQUEST_ID
+    assert record.headers["x-request-id"] == REQUEST_ID
 
 
 async def test_forward_sends_content_length_when_the_client_provided_one(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
 
     await forward(client, ByteSource(payload_of(2048)), content_length=2048)
 
-    assert recorder.headers["content-length"] == "2048"
-    assert "transfer-encoding" not in recorder.headers
+    assert record.headers["content-length"] == "2048"
+    assert "transfer-encoding" not in record.headers
 
 
 async def test_forward_falls_back_to_chunked_when_length_is_unknown(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
     payload = payload_of(2048)
 
     await forward(client, ByteSource(payload), content_length=None)
 
-    assert "content-length" not in recorder.headers
-    assert recorder.headers["transfer-encoding"] == "chunked"
-    assert recorder.body == payload
+    assert "content-length" not in record.headers
+    assert record.headers["transfer-encoding"] == "chunked"
+    assert record.body == payload
 
 
 async def test_forward_returns_extractor_success_on_200(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    mock_extract(respx_mock, Recorder())
+    mock_extract(respx_mock, make_recorder())
 
     success = await forward(client, ByteSource(payload_of(512)), content_length=512)
 
@@ -304,7 +291,7 @@ async def test_forward_closes_the_source_after_successful_forward(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    mock_extract(respx_mock, Recorder())
+    mock_extract(respx_mock, make_recorder())
     source = ByteSource(payload_of(512))
 
     await forward(client, source, content_length=512)
@@ -404,7 +391,7 @@ async def test_forward_raises_upstream_error_on_unexpected_success_shape(
     client: HttpExtractorClient,
     payload: Any,
 ) -> None:
-    mock_extract(respx_mock, Recorder(status_code=200, payload=payload))
+    mock_extract(respx_mock, make_recorder(status_code=200, payload=payload))
 
     with pytest.raises(UpstreamError):
         await forward(client, ByteSource(payload_of(256)), content_length=256)
@@ -416,7 +403,7 @@ async def test_forward_raises_upstream_error_on_unexpected_success_status(
     client: HttpExtractorClient,
     status_code: int,
 ) -> None:
-    mock_extract(respx_mock, Recorder(status_code=status_code, payload=SUCCESS_PAYLOAD))
+    mock_extract(respx_mock, make_recorder(status_code=status_code, payload=SUCCESS_PAYLOAD))
 
     with pytest.raises(UpstreamError):
         await forward(client, ByteSource(payload_of(256)), content_length=256)
@@ -456,7 +443,7 @@ async def test_forward_never_leaks_the_raw_downstream_body(
     status_code: int,
     payload: Any,
 ) -> None:
-    mock_extract(respx_mock, Recorder(status_code=status_code, payload=payload))
+    mock_extract(respx_mock, make_recorder(status_code=status_code, payload=payload))
 
     with pytest.raises((UpstreamError, ExtractionFailedError)) as caught:
         await forward(client, ByteSource(payload_of(256)), content_length=256)
@@ -469,7 +456,7 @@ async def test_forward_propagates_payload_too_large_from_the_stream_guard(
     respx_mock: respx.MockRouter,
     client: HttpExtractorClient,
 ) -> None:
-    mock_extract(respx_mock, Recorder())
+    mock_extract(respx_mock, make_recorder())
     oversized = MAX_UPLOAD_BYTES * 4
 
     with pytest.raises(PayloadTooLargeError):
@@ -488,13 +475,13 @@ async def test_ping_returns_none_when_the_extractor_answers(
 async def test_forward_does_not_duplicate_the_path_separator(
     respx_mock: respx.MockRouter,
 ) -> None:
-    recorder = Recorder()
-    mock_extract(respx_mock, recorder)
+    record = make_recorder()
+    mock_extract(respx_mock, record)
     payload = payload_of(256)
     async with extractor_client(extractor_base_url=f"{BASE_URL}/") as http_client:
         await forward(http_client, ByteSource(payload), content_length=len(payload))
 
-    assert recorder.url == EXTRACT_URL
+    assert record.url == EXTRACT_URL
 
 
 async def test_ping_probes_the_extractor_health_endpoint(

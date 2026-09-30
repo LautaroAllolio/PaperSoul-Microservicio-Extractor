@@ -221,7 +221,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 - [x] Streaming con guard verificado por tests; Prueba de humo R1 resuelta. *(T3)*
 - [x] Cliente traduce todos los errores del Extractor a excepciones de dominio. *(T4)*
 - [x] Orquestador produce `ExtractionResult` end-to-end con fake. *(T5)*
-- [ ] Review con humano del diseño de streaming antes de exponer endpoints.
+- [x] Review con humano del diseño de streaming antes de exponer endpoints.
 
 ---
 
@@ -231,27 +231,92 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 
 **Description:** Implementar `presentation/api/v1/extract.py` (router con `Request` directo, sin `UploadFile` — D1), `presentation/api/deps.py` (DI de `ExtractionService`+settings), montar el router en `main.py`, construir el `AsyncByteSource` sobre `request.stream()`, extraer metadatos del primer chunk multipart (preamanálisis ligero; fallback `""`), y cablear la respuesta envelope `200` o los handlers RFC 9457. Test de integración completo con `ASGITransport` + `respx` mock del Extractor en `tests/integration/test_extract_flow.py`: happy path byte-identical + caso de corte a mitad de stream (R3).
 
+> ⚠️ **Corrección al RED (verificada empíricamente, no por gusto).** La Description pide montar el router en `main.py` con "DI de `ExtractionService`+settings", y también pide un corte a mitad de stream donde "httpx cierra la conexión". Ninguna de las dos es asumible tal cual: `httpx.ASGITransport` **no** ejecuta el lifespan (hay que entrar a mano con `app.router.lifespan_context(app)`), y `create_app()` no acepta settings, así que el límite de tamaño no es inyectable desde un test sin tocar producción. El contrato que fija el RED es `create_app(settings)`, y el corte se afirma como lo que de verdad se puede observar: **el cliente recibe el error controlado y nunca un 200 parcial**. Ver *Desviación respecto del plan*.
+
 **Acceptance criteria:**
-- [ ] POST multipart real (campo `file`) → `200` con envelope exacto de la SPEC §6.1.
-- [ ] El body que recibe el Extractor mock es byte-identical al enviado (test).
-- [ ] Corte a mitad de stream → httpx cierra la conexión; respuesta de error controlada (no 200 parcial).
-- [ ] Request inválido (sin multipart/sin boundary) → `422 invalid-request`; exceso de tamaño → `413 payload-too-large`.
-- [ ] Loguear `request_id` en entrada y salida.
+- [ ] POST multipart real (campo `file`) → `200` con envelope exacto de la SPEC §6.1. *(RED escrito: 3 tests)*
+- [ ] El body que recibe el Extractor mock es byte-identical al enviado (test). *(RED escrito: 2 tests)*
+- [ ] Corte a mitad de stream → httpx cierra la conexión; respuesta de error controlada (no 200 parcial). *(RED escrito: 1 test)*
+- [ ] Request inválido (sin multipart/sin boundary) → `422 invalid-request`; exceso de tamaño → `413 payload-too-large`. *(RED escrito: 7 tests)*
+- [ ] Loguear `request_id` en entrada y salida. *(RED escrito: 2 tests)*
+
+**Cobertura de cada AC por los tests (34 en `tests/integration/test_extract_flow.py` + 25 en `tests/unit/test_multipart_ingress.py`):**
+- **AC1 (envelope)** → `test_extract_answers_200_with_the_spec_envelope` (set exacto de claves en los 3 niveles, más `int` y no `bool`), `..._reports_the_measured_duration` (downstream con `delay=0.05` ⇒ `>= 50 ms`, mata el `duration_ms: 0` hardcodeado), `..._never_exposes_the_raw_extractor_payload`, `test_the_envelope_request_id_is_the_one_sent_downstream`, `test_a_fresh_request_id_is_issued_for_every_request`.
+- **AC2 (byte-idéntico)** → `test_the_extractor_receives_the_uploaded_bytes_byte_identical` (200 KB, compara el body completo), `test_the_uploaded_body_reaches_the_service_byte_identical` (con `RecordingService` sobre `dependency_overrides`, sin red), `..._receives_the_original_content_type_boundary_and_length`, `test_a_chunked_upload_is_forwarded_without_a_content_length` (generador async ⇒ `Transfer-Encoding: chunked` y **sin** `Content-Length`).
+- **AC3 (corte a mitad de stream)** → `test_an_upload_cut_mid_stream_never_answers_a_partial_success`: el cliente manda 64 KB y se corta a mitad; se afirma `422`, que el Extractor recibió exactamente los bytes truncados y que **no** hubo 200 parcial. Reforzado por `test_an_oversized_upload_is_cut_with_413_and_never_completed_downstream` y `test_a_rejected_oversized_upload_does_not_poison_later_requests` (el corte no deja el source colgado).
+- **AC4 (errores de transporte)** → `test_extract_rejects_a_request_that_is_not_a_valid_multipart_upload` parametrizado en 4 casos (`not-multipart`, `wrong-media-type`, `no-boundary`, `no-content-type`) con `set(body)` exacto de Problem Details, más los 4 parámetros de `test_a_downstream_failure_reaches_the_client_as_a_problem` (`4xx`→422, `5xx`→502, `refused`→502, `timeout`→504), `test_the_extractor_message_is_propagated_as_the_problem_detail` y `test_a_network_failure_never_leaks_the_transport_error` (el `ConnectError` crudo no llega al cliente).
+- **AC5 (logging)** → `test_the_request_id_is_logged_on_entry_and_exit` (mismo `request_id` en las dos líneas de INFO con caplog), `test_logs_never_contain_the_document_content` (canario de 200 KB ausente del log).
+- **Preamanálisis** → `test_the_service_receives_the_filename_sniffed_from_the_first_chunk`, `..._an_empty_filename_when_the_preamble_has_none`, `..._no_content_length_for_a_chunked_upload`, `..._the_transport_metadata_of_the_upload`; y en unit, 11 tests del sniffer (primera parte, `filename` vs `name`, `filename*` percent-encoded, CRLF y LF, `filename` plantado en el contenido, ventana acotada).
+- **D1 / sin `UploadFile`** → `test_the_extract_route_needs_no_multipart_parser_dependency` (`find_spec("python_multipart") is None`, pasa ya en RED: es una invariante de arquitectura, no un comportamiento pendiente) y `test_multipart_ingress_never_imports_the_web_server_or_the_transport` (AST: cero `fastapi`, cero `httpx`).
+- **D7 (un cliente, cerrado)** → `test_the_extractor_client_is_created_once_and_reused` (dos requests ⇒ una sola construcción) y `test_the_extractor_client_is_closed_on_shutdown`.
+- **Streaming O(chunk)** → `test_read_never_returns_more_than_the_requested_size`, `test_peek_defaults_to_the_bounded_metadata_window`, `test_a_drained_source_never_replays_its_bytes`, `test_empty_transport_chunks_are_not_mistaken_for_the_end_of_the_body`, `test_close_releases_the_source_and_can_be_called_again`.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/integration/test_extract_flow.py`.
-- [ ] Manual check: `curl -F "file=@sample.pdf" localhost:8000/api/v1/extract` → envelope.
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [ ] Tests pass: `uv run pytest tests/integration/test_extract_flow.py`. *(RED: 33 failed, 1 passed — ver abajo)*
+- [ ] Manual check: `curl -F "file=@sample.pdf" localhost:8000/api/v1/extract` → envelope. *(requiere GREEN)*
+- [x] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 38 files already formatted; `mypy -p bigpickle` → Success, no issues in 24 source files)*
+- [x] La suite de T1–T5 sigue verde: `uv run pytest tests --ignore=tests/unit/test_multipart_ingress.py --ignore=tests/integration` → **144 passed**.
+
+**Estado:** 🔴 RED. Escritos 59 tests (25 unit + 34 integración) y **cero** código de producción de T6. Fallas actuales, todas por contrato todavía no implementado:
+- `tests/unit/test_multipart_ingress.py` → `ImportError: cannot import name 'multipart' from 'bigpickle.infrastructure.http'` (error de colección: el módulo que hay que crear no existe; misma convención que T3–T5).
+- `tests/integration/test_extract_flow.py` → 26 × `TypeError: create_app() takes 0 positional arguments but 1 was given` + 7 × `ModuleNotFoundError: No module named 'bigpickle.presentation.api'`.
+- El único test que pasa es `..._needs_no_multipart_parser_dependency`, que es una invariante de arquitectura y debe seguir pasando en GREEN.
+
+**Cómo se sostiene cada principio SOLID (dónde se verifica, no en teoría):**
+- **SRP** — `multipart.py` solo adapta el body de la request al port `AsyncByteSource` y olfatea el primer chunk; `deps.py` solo resuelve dependencias; el router solo traduce HTTP↔dominio. Los tests de capa (`..._never_imports_the_web_server_or_the_transport`) fallan si `multipart.py` empieza a conocer FastAPI o httpx.
+- **OCP** — El límite de tamaño y la URL del Extractor entran por `create_app(settings)`, así que los 4 escenarios de downstream (4xx, 5xx, refused, timeout) se prueban sin tocar el router.
+- **LSP** — El mismo `ExtractionService` (Protocol) se instancia con el `ExtractionOrchestrator` real **y** con `RecordingService` vía `dependency_overrides`; los dos caminos tienen tests (`..._the_uploaded_body_reaches_the_service_byte_identical` con el doble, `..._receives_the_uploaded_bytes_byte_identical` con el cliente real sobre `respx`).
+- **ISP** — `deps.py` expone `get_extractor_client`, `get_request_id` y `get_extraction_service`; los tests sobrescriben solo la dependencia que necesitan, así que una dependencia que crezca de más se notaría en el diff de los overrides.
+- **DIP** — El router depende de `ExtractionService`, no de `HttpExtractorClient`. Prueba ejecutable: `test_the_uploaded_body_reaches_the_service_byte_identical` corre **sin `respx`** porque la dependencia está sustituida.
+
+**Validación de la calidad de los tests: mutation testing.** Un RED que solo verifica "falla" no demuestra nada. Se escribió un GREEN temporal (5 archivos de producción) y se comprobó que **203 tests** lo satisfacen; después se mutó ese GREEN y se verificó que cada comportamiento quedaba muerto. El prototipo se borró y el árbol quedó en RED real.
+
+| Mutante | Tests que lo matan |
+|---|---|
+| `peek()` que consume en vez de inspeccionar (el bug que la sonda previa anticipó) | 6 de integración, incluidos los 3 de byte-identidad y el de corte a mitad de stream |
+| `peek()` que devuelve una copia y avanza el buffer | 3 unit + 5 de integración |
+| `read()` que ignora el `size` pedido y entrega todo el buffer | 1 (`..._read_never_returns_more_than_the_requested_size`) |
+| Chunk `b""` del transporte tratado como fin del body | 1 (`..._empty_transport_chunks_are_not_mistaken_for_the_end_of_the_body`) |
+| Sniffer que devuelve el `name` del campo en vez del `filename` | 4 unit + 3 de integración |
+| Sniffer que ignora `METADATA_WINDOW` | 1 (`..._sniff_never_reads_farther_than_the_metadata_window`) |
+| `boundary` no validado | 1 (`[no-boundary]`) |
+| `Content-Length` ausente se reporta como `0` en vez de `None` | 2 |
+| `duration_ms: 0` hardcodeado | 1 (`..._reports_the_measured_duration`) — **sobrevivió en la primera ronda y por eso se añadió ese test** |
+| Línea de log de entrada o de salida eliminada | 1 cada una |
+| Cliente por request en vez de uno por app | 25 |
+| Cliente nunca cerrado | 1 (`..._is_closed_on_shutdown`) |
+| `request_id` nuevo por cada acceso a la dependencia (sin cachear) | 1 (`..._the_request_id_is_the_one_sent_downstream`) |
+| Errores de dominio envueltos en `RuntimeError` (→ 500 opaco) | 10 |
+| El mensaje del Extractor no llega al `detail` del problema | 10 (incluye `..._is_propagated_as_the_problem_detail`) |
+| Un POST fallido se reintenta una vez (D6) | 10 |
+
+**Por qué un RED con este diseño no es test-por-test de la implementación:** las sondas previas (`/tmp/opencode/probe/`, fuera del repo) fijaron tres hechos que un test ingenuo hubiera pasado por alto: `request.stream()` emite un `b""` final que no es EOF; un generador async produce `chunked` sin `Content-Length`; y un `peek` implementado con `read()` deja el preámbulo multipart ya consumido, que es exactamente el mutante que mata la fila 1 de la tabla.
+
+**Contrato fijado por los tests (decisiones que la Description no explicaba):**
+- **`RequestByteSource(chunks: AsyncIterator[bytes])`** en `infrastructure/http/multipart.py`, con `peek(size=METADATA_WINDOW)`, `read(size=-1)` y `close()`. `AsyncByteSource` es un `Protocol` sin `@runtime_checkable`, así que la conformidad se verifica estructuralmente con `inspect.iscoroutinefunction` (no con `isinstance`).
+- **`sniff_multipart_filename(prefix: bytes) -> str`** es una función pura: recibe bytes ya leídos y no toca la red. Por eso `METADATA_WINDOW` es un parámetro con default *de la función*, y el test la verifica truncando internamente — así ningún llamador puede pasarse de la ventana.
+- **`create_app(settings: Settings | None = None)`**: la firma con default conserva `app = create_app()` y abre la única costura para fijar `max_upload_bytes` en un test. `app = create_app()` sigue existiendo en el nivel de módulo.
+- **El `request_id` se resuelve una vez por request** con una dependencia cacheada de FastAPI y se le inyecta al orquestador como `new_request_id=lambda: request_id`. T5 decidió que el orquestador genera el id, así que el endpoint no puede inventar otro: `test_the_envelope_request_id_is_the_one_sent_downstream` ata las tres apariciones (log, header `X-Request-Id`, envelope).
+- **Un cliente por app, en `app.state`, cerrado en el lifespan.** `ASGITransport` no corre el lifespan, así que `tests/harness.py` lo entra a mano con `app.router.lifespan_context(app)`; sin eso los tests de "creado una vez" y "cerrado" pasarían por-accidente.
+- **No se parsea el multipart.** Solo se valida el transporte (media type + `boundary`) y se olfatea el nombre; validar el campo `file` o el tamaño real del archivo exigiría buffering, que la D1 prohíbe. El Extractor sigue siendo la autoridad.
+- **Sin `get_settings` en `deps.py`** (YAGNI): T7 lo añade si lo necesita.
+
+**Desviación respecto del plan (justificada empíricamente):**
+"httpx cierra la conexión" no es observable con `ASGITransport`: no hay socket real. Lo que sí se verifica —y es lo que importa para el cliente— es que un body cortado a mitad produce el error controlado y **nunca** un 200 parcial, y que el Extractor recibió exactamente los bytes que realmente llegaron. Y `create_app()` sin argumentos hace imposible testear el 413 sin tocar producción, así que el RED fija la firma inyectable; si el GREEN preferiera leer settings de `os.environ`, estos tests lo obligarían a cambiar, que es el punto.
+
+**Refactor DRY incluido en la fase RED:** `DownstreamRecorder` (con `calls`, `on_call`, `delay` y lectura del body con `aread()`) y `payload_of`/`multipart_body` vivían en `tests/unit/test_http_client.py`; esta task los necesitaba y habría creado una segunda copia. Se movieron a `tests/fakes.py` y `test_http_client.py` pasó a importarlos (144 tests de T1–T5 verdes tras el refactor). El harness de app (`Serving`, `serving()`, `extractor_settings()`) quedó en `tests/harness.py`, no dentro del test, porque Task 7 reutilizará exactamente lo mismo.
 
 **Dependencies:** Task 2, Task 5
 
 **Files likely touched:**
-- `src/bigpickle/presentation/api/v1/extract.py`, `src/bigpickle/presentation/api/deps.py`
-- `src/bigpickle/main.py`
-- `src/bigpickle/infrastructure/http/multipart.py` (preamanálisis ligero de metadatos)
-- `tests/integration/test_extract_flow.py`
+- `src/bigpickle/presentation/api/v1/extract.py`, `src/bigpickle/presentation/api/deps.py` — **aún no creados**
+- `src/bigpickle/main.py` — **sin cambios** (el RED solo exige la firma `create_app(settings)`)
+- `src/bigpickle/infrastructure/http/multipart.py` (preamanálisis ligero de metadatos) — **aún no creado**
+- `tests/integration/test_extract_flow.py` — creado (RED)
+- `tests/unit/test_multipart_ingress.py`, `tests/harness.py`, `tests/integration/__init__.py` — creados (RED)
+- `tests/fakes.py`, `tests/unit/test_http_client.py` — refactor DRY
 
-**Estimated scope:** Medium (4-5 archivos).
+**Estimated scope:** Medium (4-5 archivos de producción, 5 de test).
 
 ---
 
