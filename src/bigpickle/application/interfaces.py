@@ -5,7 +5,7 @@ application layer never imports FastAPI, httpx or any concrete
 infrastructure class (dependency inversion, plan.md § 3).
 """
 
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, runtime_checkable
 
 
 class AsyncByteSource(Protocol):
@@ -33,8 +33,14 @@ class ExtractionResult(TypedDict):
     duration_ms: int
 
 
+@runtime_checkable
 class ExtractionService(Protocol):
-    """Use case that orchestrates one document extraction."""
+    """Use case that orchestrates one document extraction.
+
+    ``@runtime_checkable`` lets tests assert that a concrete orchestrator
+    actually honours this port, so a drifted signature fails the suite instead
+    of surfacing at the first HTTP request.
+    """
 
     async def extract(
         self,

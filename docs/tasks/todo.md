@@ -152,12 +152,12 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 > ⚠️ **Corrección al RED (no seguir el paso 3 a ciegas).** "Construir `SourceForwardingStream` sobre la fuente recibida" es imposible y está desmentido por ejecución real: `forward()` recibe una `AsyncByteSource` y `SourceForwardingStream` no implementa `read()`/`close()`. El orquestador reenvía la fuente intacta y el stream lo construye el cliente. Ver *Desviación respecto del plan* abajo.
 
 **Acceptance criteria:**
-- [ ] Orquesta correctamente usando el cliente inyectado (fake en tests); produce `ExtractionResult` completo.
-- [ ] Propaga las excepciones de dominio sin transformarlas (las traduce la presentación).
-- [ ] Registra `duration_ms` ≥ 0; `request_id` único por llamada.
-- [ ] Inyectable: el mismo código funciona con fake y con `HttpExtractorClient` real.
+- [x] Orquesta correctamente usando el cliente inyectado (fake en tests); produce `ExtractionResult` completo.
+- [x] Propaga las excepciones de dominio sin transformarlas (las traduce la presentación).
+- [x] Registra `duration_ms` ≥ 0; `request_id` único por llamada.
+- [x] Inyectable: el mismo código funciona con fake y con `HttpExtractorClient` real.
 
-**Cobertura de cada AC por los tests RED (21 tests en `tests/unit/test_orchestrator.py`):**
+**Cobertura de cada AC por los tests (21 tests en `tests/unit/test_orchestrator.py`):**
 - **AC1** → `test_orchestrator_returns_a_complete_extraction_result` (set exacto de 4 claves), `..._calls_the_injected_client_exactly_once`, `..._relays_the_source_untouched`, `..._relays_the_request_metadata`, `..._accepts_an_unknown_filename`.
 - **AC2** → `test_orchestrator_propagates_domain_errors_unchanged`, parametrizado sobre las **7** excepciones de `errors.py`, afirmando identidad (`caught.value is error`), no solo el tipo.
 - **AC3** → `..._measures_duration_ms` (fake con `delay=0.05` ⇒ `>= 50 ms`, prueba que se *mide* y no se hardcodea), `..._reports_a_non_negative_integer_duration` (descarta `bool`), `..._generates_a_fresh_uuid4_request_id_per_call`, `..._delegates_request_id_generation_to_the_injected_factory`.
@@ -166,10 +166,21 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 - **Capa** → `..._never_imports_http_or_concrete_infrastructure`.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/unit/test_orchestrator.py`. *(RED: la colección falla con `ModuleNotFoundError: No module named 'bigpickle.application.services'`, que es el RED esperado; el resto de la suite sigue en 123 passed)*
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(se validan en GREEN)*
+- [x] Tests pass: `uv run pytest tests/unit/test_orchestrator.py`. *(GREEN: 21 passed; suite completa del proyecto **144 passed**)*
+- [x] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 34 files already formatted; `mypy -p bigpickle` → Success, no issues in 24 source files)*
 
-**Estado:** 🔴 RED. `tests/unit/test_orchestrator.py` escrito y verificado mecánicamente; `application/services/orchestrator.py` e `infrastructure/tracing.py` **no existen todavía** a propósito.
+**Estado:** 🟢 GREEN. Implementados `infrastructure/tracing.py`, `application/services/__init__.py` y `application/services/orchestrator.py`; `interfaces.py` solo recibió `@runtime_checkable` sobre el Protocol que ya fijó T3. **Los 21 tests del RED pasaron sin modificación alguna**: cero cambios en `test_orchestrator.py` entre RED y GREEN, que es la prueba de que el RED describía el contrato y no la implementación.
+
+**Cómo se sostiene cada principio SOLID (no como teoría, con dónde se verifica):**
+- **SRP** — `tracing.py` solo genera ids; `orchestrator.py` solo secuencia el caso de uso; el mapeo a HTTP y a errores RFC 9457 sigue en presentación (T2/T6). Tres archivos, una razón para cambiar cada uno.
+- **OCP** — Las dos únicas cosas que varían (cliente y fábrica de ids) son parámetros del constructor. Agregar otro cliente downstream no obliga a tocar el orquestador.
+- **LSP** — `FakeExtractorClient` y `HttpExtractorClient` se inyectan en **el mismo** `ExtractionOrchestrator`. Lo prueban `..._composes_with_the_real_http_client` y `..._surfaces_real_downstream_failures_as_domain_errors` (cliente real sobre `respx`, no fake): es el AC4 con evidencia, no con una afirmación.
+- **ISP** — El orquestador depende de `ExtractorClient` (2 métodos) y solo usa `forward()`. No toca `ping()`, que es del caso de uso de readiness (T7). Ningún cliente implementa métodos que no se usan.
+- **DIP** — No construye nada: `grep` sobre el módulo solo encuentra `self._new_request_id = new_request_id` (asignación de referencia). Depende de la ABC `ExtractorClient` y de un `Callable[[], str]`, ambos abstracciones.
+
+**Auditoría de capas ejecutada sobre `src/bigpickle/application/`:** el **único** import de infraestructura es `infrastructure.http.downstream.base` (el puerto). Cero `httpx`, cero `fastapi`, cero `presentation`, cero `config`. Coincide con la tabla de plan §3 y con el test `..._never_imports_http_or_concrete_infrastructure`, que lo verifica por AST en cada corrida en vez de dejarlo escrito en un docstring.
+
+**graphify como apoyo al GREEN:** `graphify path "ExtractionOrchestrator" "HttpExtractorClient"` responde **`No directed path found between 'ExtractionOrchestrator' and 'HttpExtractorClient'`**, y `graphify explain "Dependency Inversion"` muestra que el nodo conecta solo con `ExtractorClient Interface` y `ExtractionService Interface`. El grafo ya representa la regla de capas y la implementación la respeta sin atajos. Nota honesta: el grafo está en commit `c4196ba`, anterior a T3/T4 — cubre `SourceForwardingStream`, `HttpExtractorClient` y `ExtractionOrchestrator` (este último vía `plan.md`), pero **`tracing`/`new_request_id` no aparecen**, correcto porque los archivos no existían. Conviene `/graphify --update` antes del Checkpoint B.
 
 **Contrato fijado por los tests (decisiones que la descripción de la Task no explicaba):**
 - **Firma:** `ExtractionOrchestrator(client=…, new_request_id=…)`, ambos **inyectados y obligatorios**; `async extract(source, *, filename, content_type, content_length) -> ExtractionResult`. Coincide con el Protocol `ExtractionService` que ya fijó T3, así que el GREEN solo necesita añadirle `@runtime_checkable` para poder verificar `isinstance` (test `..._satisfies_the_extraction_service_port`).
@@ -209,7 +220,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 ### Checkpoint B (tras Tasks 3-5)
 - [x] Streaming con guard verificado por tests; Prueba de humo R1 resuelta. *(T3)*
 - [x] Cliente traduce todos los errores del Extractor a excepciones de dominio. *(T4)*
-- [ ] Orquestador produce `ExtractionResult` end-to-end con fake. *(RED hecho y validado por mutation testing; falta el GREEN)*
+- [x] Orquestador produce `ExtractionResult` end-to-end con fake. *(T5)*
 - [ ] Review con humano del diseño de streaming antes de exponer endpoints.
 
 ---
