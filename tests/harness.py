@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI
 
-from bigpickle.infrastructure.config.settings import Settings
+from paperextractor.infrastructure.config.settings import Settings
 
 EXTRACTOR_BASE_URL = "http://extractor:8000"
 EXTRACTOR_URL = f"{EXTRACTOR_BASE_URL}/api/v1/extract"
@@ -42,7 +42,7 @@ class Serving:
 @asynccontextmanager
 async def serving(settings: Settings) -> AsyncIterator[Serving]:
     """Run the app the way the ASGI server would, and talk to it over ASGI."""
-    from bigpickle.main import create_app
+    from paperextractor.main import create_app
 
     app = create_app(settings)
     async with app.router.lifespan_context(app):

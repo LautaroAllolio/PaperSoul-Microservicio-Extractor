@@ -14,8 +14,8 @@ implementation of the port, and neither choice would be ours to make.
 import time
 from collections.abc import Callable
 
-from bigpickle.application.interfaces import AsyncByteSource, ExtractionResult
-from bigpickle.infrastructure.http.downstream.base import ExtractorClient
+from paperextractor.application.interfaces import AsyncByteSource, ExtractionResult
+from paperextractor.infrastructure.http.downstream.base import ExtractorClient
 
 
 class ExtractionOrchestrator:

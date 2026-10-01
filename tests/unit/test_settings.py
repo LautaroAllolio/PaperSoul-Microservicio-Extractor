@@ -1,6 +1,6 @@
-"""Unit tests for BIGPICKLE_-prefixed settings (pydantic-settings)."""
+"""Unit tests for PAPEREXTRACTOR_-prefixed settings (pydantic-settings)."""
 
-from bigpickle.infrastructure.config.settings import Settings
+from paperextractor.infrastructure.config.settings import Settings
 
 
 def test_settings_defaults_match_plan_section_7() -> None:
@@ -19,9 +19,9 @@ def test_settings_defaults_match_plan_section_7() -> None:
 
 
 def test_settings_load_from_env_with_prefix(monkeypatch) -> None:
-    monkeypatch.setenv("BIGPICKLE_MAX_UPLOAD_BYTES", "1024")
-    monkeypatch.setenv("BIGPICKLE_EXTRACTOR_BASE_URL", "http://localhost:9000")
-    monkeypatch.setenv("BIGPICKLE_PORT", "9999")
+    monkeypatch.setenv("PAPEREXTRACTOR_MAX_UPLOAD_BYTES", "1024")
+    monkeypatch.setenv("PAPEREXTRACTOR_EXTRACTOR_BASE_URL", "http://localhost:9000")
+    monkeypatch.setenv("PAPEREXTRACTOR_PORT", "9999")
 
     settings = Settings()
 

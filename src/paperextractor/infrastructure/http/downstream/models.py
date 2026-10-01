@@ -2,7 +2,7 @@
 
 These records hold *untrusted* wire data: parsing is strict about the fields
 the contract requires and permissive about anything else, so the Extractor can
-add fields without breaking BigPickle. Validating the shape is their only
+add fields without breaking PaperExtractor. Validating the shape is their only
 responsibility; turning a bad shape into a domain exception is the client's job.
 """
 

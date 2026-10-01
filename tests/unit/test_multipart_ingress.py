@@ -1,6 +1,6 @@
 """RED-phase contract tests for Task 6's ingress side: the multipart body adapter.
 
-``bigpickle.infrastructure.http.multipart`` does not exist yet, so collection
+``paperextractor.infrastructure.http.multipart`` does not exist yet, so collection
 must fail until the production code is implemented.
 
 Design contract pinned here (task 6 + plan.md D1 and § 6.1 footnote):
@@ -33,16 +33,16 @@ from types import ModuleType
 
 import pytest
 
-from bigpickle.application.interfaces import AsyncByteSource
-from bigpickle.infrastructure.http import multipart
-from bigpickle.infrastructure.http.multipart import (
+from paperextractor.application.interfaces import AsyncByteSource
+from paperextractor.infrastructure.http import multipart
+from paperextractor.infrastructure.http.multipart import (
     METADATA_WINDOW,
     RequestByteSource,
     sniff_multipart_filename,
 )
 
 CHUNK_SIZE = 64 * 1024
-BOUNDARY = "----BigPickleBoundary"
+BOUNDARY = "----PaperExtractorBoundary"
 
 DISPOSITION_PART = (
     f"--{BOUNDARY}\r\n"

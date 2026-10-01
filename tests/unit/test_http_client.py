@@ -1,6 +1,6 @@
 """RED-phase contract tests for Task 4's downstream Extractor client.
 
-``bigpickle.infrastructure.http.downstream`` (the client port, the raw payload
+``paperextractor.infrastructure.http.downstream`` (the client port, the raw payload
 models and the httpx implementation) does not exist yet, so collection must
 fail until the production code is implemented.
 """
@@ -13,17 +13,17 @@ import httpx
 import pytest
 import respx
 
-from bigpickle.application.errors import (
+from paperextractor.application.errors import (
     ExtractionFailedError,
     PayloadTooLargeError,
     UpstreamError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
-from bigpickle.infrastructure.config.settings import Settings
-from bigpickle.infrastructure.http.downstream.base import ExtractorClient
-from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
-from bigpickle.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
+from paperextractor.infrastructure.config.settings import Settings
+from paperextractor.infrastructure.http.downstream.base import ExtractorClient
+from paperextractor.infrastructure.http.downstream.http_client import HttpExtractorClient
+from paperextractor.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
 from tests.fakes import ByteSource, DownstreamRecorder, payload_of
 
 BASE_URL = "http://extractor:8000"
@@ -34,7 +34,7 @@ HEALTH_URL = f"{BASE_URL}{HEALTH_PATH}"
 
 MAX_UPLOAD_BYTES = 4096
 REQUEST_ID = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-CONTENT_TYPE = 'multipart/form-data; boundary="----BigPickleBoundary"'
+CONTENT_TYPE = 'multipart/form-data; boundary="----PaperExtractorBoundary"'
 EXTRACTOR_ERROR_MESSAGE = "No se pudo extraer texto del PDF o archivo ilegible"
 SUCCESS_PAYLOAD: dict[str, Any] = {
     "extracted_text": "Texto plano extraído del PDF...",

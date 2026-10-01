@@ -12,7 +12,7 @@ Two things live here, both of them about *the request side* of the relay:
 
 Why the window exists: multipart part headers are a few hundred bytes, so a
 bounded prefix is enough to name the file while keeping memory O(chunk). The
-Extractor stays the authority on the document itself — BigPickle deliberately
+Extractor stays the authority on the document itself — PaperExtractor deliberately
 does not parse the multipart body (D1), which is also why this module is
 importable without any multipart parser installed.
 

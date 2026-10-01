@@ -2,18 +2,18 @@
 
 import httpx
 
-from bigpickle.application.errors import (
-    BigPickleError,
+from paperextractor.application.errors import (
     ExtractionFailedError,
+    PaperExtractorError,
     UpstreamError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
-from bigpickle.application.interfaces import AsyncByteSource
-from bigpickle.infrastructure.config.settings import Settings
-from bigpickle.infrastructure.http.downstream.base import ExtractorClient
-from bigpickle.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
-from bigpickle.infrastructure.http.streaming import SourceForwardingStream
+from paperextractor.application.interfaces import AsyncByteSource
+from paperextractor.infrastructure.config.settings import Settings
+from paperextractor.infrastructure.http.downstream.base import ExtractorClient
+from paperextractor.infrastructure.http.downstream.models import ExtractorError, ExtractorSuccess
+from paperextractor.infrastructure.http.streaming import SourceForwardingStream
 
 EXTRACT_PATH = "/api/v1/extract"
 HEALTH_PATH = "/health"
@@ -36,7 +36,7 @@ def _detail_from(response: httpx.Response) -> str:
         return UNUSABLE_ERROR_DETAIL
 
 
-def _failure_for(response: httpx.Response) -> BigPickleError:
+def _failure_for(response: httpx.Response) -> PaperExtractorError:
     """Translate a non-``200`` answer per D4: 4xx is the caller's fault, 5xx is upstream's."""
     detail = _detail_from(response)
     if 400 <= response.status_code < 500:

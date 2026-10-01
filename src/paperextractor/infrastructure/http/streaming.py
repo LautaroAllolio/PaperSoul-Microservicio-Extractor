@@ -4,8 +4,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from bigpickle.application.errors import PayloadTooLargeError
-from bigpickle.application.interfaces import AsyncByteSource
+from paperextractor.application.errors import PayloadTooLargeError
+from paperextractor.application.interfaces import AsyncByteSource
 
 DEFAULT_CHUNK_SIZE = 64 * 1024
 

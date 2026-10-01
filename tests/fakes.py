@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from bigpickle.application.interfaces import AsyncByteSource
+from paperextractor.application.interfaces import AsyncByteSource
 
 
 class ByteSource:

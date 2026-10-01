@@ -8,13 +8,13 @@ problems), not a collection error: the only imports that do not exist yet
 Design contract pinned here (task 6 + SPEC § 6.1, § 8.1, § 9.1 + plan.md D1,
 D4, D5, D6, D7, § 6.1):
 
-* The client gets BigPickle's own envelope, never the Extractor's raw payload,
+* The client gets PaperExtractor's own envelope, never the Extractor's raw payload,
   and only when the Extractor answered ``200``.
 * The bytes the Extractor receives are the bytes the client sent, boundary
   included, with the incoming ``Content-Type``/``Content-Length`` — the upload
   is relayed, never rebuilt or buffered (D1, D5).
 * Transport validation only: no ``multipart/form-data`` with a boundary is a
-  ``422 invalid-request`` and never reaches the downstream. BigPickle
+  ``422 invalid-request`` and never reaches the downstream. PaperExtractor
   deliberately does **not** inspect the document: that is the Extractor's job
   (plan.md D1), and a required-field check would require buffering the body.
 * The size guard cuts the forward mid-stream and answers ``413`` — never a
@@ -47,14 +47,14 @@ import httpx
 import pytest
 import respx
 
-from bigpickle.application.interfaces import AsyncByteSource, ExtractionResult
-from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
-from bigpickle.infrastructure.http.streaming import DEFAULT_CHUNK_SIZE
-from bigpickle.presentation.errors.handlers import PROBLEM_URI_BASE
+from paperextractor.application.interfaces import AsyncByteSource, ExtractionResult
+from paperextractor.infrastructure.http.downstream.http_client import HttpExtractorClient
+from paperextractor.infrastructure.http.streaming import DEFAULT_CHUNK_SIZE
+from paperextractor.presentation.errors.handlers import PROBLEM_URI_BASE
 from tests.fakes import DownstreamRecorder, multipart_body, payload_of
 from tests.harness import EXTRACT_PATH, EXTRACTOR_URL, Serving, extractor_settings, serving
 
-BOUNDARY = "----BigPickleBoundary"
+BOUNDARY = "----PaperExtractorBoundary"
 CONTENT_TYPE = f"multipart/form-data; boundary={BOUNDARY}"
 FILENAME = "contrato.pdf"
 
@@ -124,7 +124,7 @@ class RecordingService:
 
 def dependency_module() -> ModuleType:
     """Import the DI seam lazily: the other tests must still run and report behaviour."""
-    from bigpickle.presentation.api import deps
+    from paperextractor.presentation.api import deps
 
     return deps
 
@@ -168,7 +168,7 @@ def mock_extractor(respx_mock: respx.MockRouter, record: DownstreamRecorder) -> 
     return respx_mock.post(EXTRACTOR_URL).mock(side_effect=record)
 
 
-# --- AC1: the client gets BigPickle's envelope, never the Extractor's payload ---
+# --- AC1: the client gets PaperExtractor's envelope, never the Extractor's payload ---
 
 
 async def test_extract_answers_200_with_the_spec_envelope(respx_mock: respx.MockRouter) -> None:
@@ -331,17 +331,21 @@ async def test_the_request_id_is_logged_on_entry_and_exit(
     record = DownstreamRecorder(200, SUCCESS_PAYLOAD)
     record.on_call.append(
         lambda: logged_before_the_extractor_call.append(
-            [entry.getMessage() for entry in caplog.records if entry.name.startswith("bigpickle")]
+            [
+                entry.getMessage()
+                for entry in caplog.records
+                if entry.name.startswith("paperextractor")
+            ]
         )
     )
     mock_extractor(respx_mock, record)
 
-    with caplog.at_level(logging.INFO, logger="bigpickle"):
+    with caplog.at_level(logging.INFO, logger="paperextractor"):
         async with serving(extractor_settings()) as running:
             response = await post_upload(running.client)
 
     request_id = response.json()["request_id"]
-    entries = [entry for entry in caplog.records if entry.name.startswith("bigpickle")]
+    entries = [entry for entry in caplog.records if entry.name.startswith("paperextractor")]
     messages = [entry.getMessage() for entry in entries]
     assert len(logged_before_the_extractor_call) == 1
     assert any(request_id in message for message in logged_before_the_extractor_call[0])
@@ -355,7 +359,7 @@ async def test_logs_never_contain_the_document_content(
 ) -> None:
     mock_extractor(respx_mock, DownstreamRecorder(200, SUCCESS_PAYLOAD))
 
-    with caplog.at_level(logging.INFO, logger="bigpickle"):
+    with caplog.at_level(logging.INFO, logger="paperextractor"):
         async with serving(extractor_settings()) as running:
             response = await post_upload(running.client)
 

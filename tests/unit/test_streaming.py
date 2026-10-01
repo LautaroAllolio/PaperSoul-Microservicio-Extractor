@@ -1,7 +1,7 @@
 """RED-phase contract tests for Task 3's no-disk streaming adapter.
 
-``bigpickle.application.interfaces`` and
-``bigpickle.infrastructure.http.streaming`` do not exist yet, so collection
+``paperextractor.application.interfaces`` and
+``paperextractor.infrastructure.http.streaming`` do not exist yet, so collection
 must fail until the production code is implemented.
 """
 
@@ -14,9 +14,9 @@ from typing import Any
 import httpx
 import pytest
 
-from bigpickle.application.errors import PayloadTooLargeError
-from bigpickle.application.interfaces import AsyncByteSource
-from bigpickle.infrastructure.http.streaming import SourceForwardingStream
+from paperextractor.application.errors import PayloadTooLargeError
+from paperextractor.application.interfaces import AsyncByteSource
+from paperextractor.infrastructure.http.streaming import SourceForwardingStream
 from tests.fakes import ByteSource
 
 DEFAULT_CHUNK_SIZE = 64 * 1024

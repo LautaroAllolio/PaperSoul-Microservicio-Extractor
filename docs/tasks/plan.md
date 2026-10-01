@@ -1,7 +1,7 @@
-# Implementation Plan: BigPickle (Orquestador PaperSoul)
+# Implementation Plan: PaperExtractor (Orquestador PaperSoul)
 
 **Fase:** 2 de SDD (Planeación y Diseño de Capas)
-**Especificación:** `SPEC-bigpickle.md`
+**Especificación:** `SPEC-paperextractor.md`
 **Task list operativo:** `tasks/todo.md`
 **Fecha:** 2026-09-22
 
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-BigPickle orquesta la extracción de documentos del ecosistema PaperSoul. Bajo FastAPI, recibe un `multipart/form-data`, **reeenvía el cuerpo crudo en streaming** al microservicio Extractor (`POST /api/v1/extract`) sin materializarlo en disco, y responde al cliente con un envelope propio. Todos los errores son RFC 9457. Este documento define la arquitectura en 3 capas, las interfaces, el diseño del streaming y el orden de implementación.
+PaperExtractor orquesta la extracción de documentos del ecosistema PaperSoul. Bajo FastAPI, recibe un `multipart/form-data`, **reeenvía el cuerpo crudo en streaming** al microservicio Extractor (`POST /api/v1/extract`) sin materializarlo en disco, y responde al cliente con un envelope propio. Todos los errores son RFC 9457. Este documento define la arquitectura en 3 capas, las interfaces, el diseño del streaming y el orden de implementación.
 
 ---
 
@@ -17,21 +17,21 @@ BigPickle orquesta la extracción de documentos del ecosistema PaperSoul. Bajo F
 
 ### D1. Streaming raw passthrough (sin parsear multipart) — *la decisión central*
 
-**Elección:** BigPickle **no** usa `UploadFile` ni `python-multipart`. Expone el endpoint con `request: Request` y reenvía `request.stream()` byte a byte vía un adapter `httpx.AsyncByteStream`.
+**Elección:** PaperExtractor **no** usa `UploadFile` ni `python-multipart`. Expone el endpoint con `request: Request` y reenvía `request.stream()` byte a byte vía un adapter `httpx.AsyncByteStream`.
 
 **Por qué:**
 - **Cero disco garantizado.** Starlette/`python-multipart` spoola a disco archivos > 1 MB (`SpooledTemporaryFile`). El requisito "sin almacenamiento intermedio" se vuelve imposible de garantizar con `UploadFile`. Con streaming crudo, la única escritura posible es la del propio runtime (ninguna).
 - **Memoria constante O(chunk)**, sin buffering del archivo completo.
 - **Sin recodificación:** se reenvía el boundary original del cliente → cero riesgo de romper el contrato multipart.
-- El Extractor es quien debe validar contenido; BigPickle solo valida transporte (content-type, tamaño).
+- El Extractor es quien debe validar contenido; PaperExtractor solo valida transporte (content-type, tamaño).
 
-**Trade-offs:** BigPickle no puede inspeccionar el archivo (no lo necesita — es orquestador); requiere un servidor que acepte request body en streaming/chunked (Uvicorn/h11 lo hace). Si en el futuro se necesita inspección, se migra a `UploadFile` con threshold de memoria (Ask first).
+**Trade-offs:** PaperExtractor no puede inspeccionar el archivo (no lo necesita — es orquestador); requiere un servidor que acepte request body en streaming/chunked (Uvicorn/h11 lo hace). Si en el futuro se necesita inspección, se migra a `UploadFile` con threshold de memoria (Ask first).
 
 **Fallback (si httpx no cooperara con length):** enviar con `Transfer-Encoding: chunked` (sin `Content-Length`) — ver R1/R2.
 
 ### D2. Envelope de respuesta propio
 
-BigPickle define `DocumentExtractResponse` (`request_id` + `document` + `orchestration`), desacoplado del `{extracted_text, extraction_method, page_count}` crudo del Extractor. Permite evolucionar bigote: agregar otros downstreams, tracing y metadatos sin romper clientes.
+PaperExtractor define `DocumentExtractResponse` (`request_id` + `document` + `orchestration`), desacoplado del `{extracted_text, extraction_method, page_count}` crudo del Extractor. Permite evolucionar bigote: agregar otros downstreams, tracing y metadatos sin romper clientes.
 
 ### D3. RFC 9457 como único idioma de error
 
@@ -39,7 +39,7 @@ Un único modelo `ProblemDetails` (`presentation/schemas/problems.py`) + 4 handl
 
 ### D4. Regla de traducción de status
 
-`4xx` del Extractor → `4xx` de BigPickle (culpa del cliente). `5xx`/red/timeout → `502`/`504` de BigPickle (culpa upstream). 413 por tamaño se corta en BigPickle (guard).
+`4xx` del Extractor → `4xx` de PaperExtractor (culpa del cliente). `5xx`/red/timeout → `502`/`504` de PaperExtractor (culpa upstream). 413 por tamaño se corta en PaperExtractor (guard).
 
 ### D5. `Content-Length` forwards cuando se conoce
 
@@ -47,7 +47,7 @@ El adapter `SourceForwardingStream.get_content_length()` devuelve el `Content-Le
 
 ### D6. Sin reintentos automáticos en POST
 
-Un POST reenviado puede duplicar el trabajo downstream. `retries=0` por defecto en el `AsyncClient`. El nivel de reintento (si acaso) es decisión del orquestador de más arriba, no de BigPickle.
+Un POST reenviado puede duplicar el trabajo downstream. `retries=0` por defecto en el `AsyncClient`. El nivel de reintento (si acaso) es decisión del orquestador de más arriba, no de PaperExtractor.
 
 ### D7. Pool y timeouts configurables
 
@@ -59,9 +59,9 @@ Un POST reenviado puede duplicar el trabajo downstream. `retries=0` por defecto 
 
 | Capa | Directorio | Responsabilidad | Conoce de | Nunca conoce de |
 |---|---|---|---|---|
-| **Presentación / Routers** | `src/bigpickle/presentation/` | Endpoints HTTP, DTOs de entrada/salida, handlers RFC 9457, inyección de dependencias | dominio (excepciones + interfaces) | httpx, config |
-| **Lógica de Negocio / Servicios** | `src/bigpickle/application/` | Interfaz `ExtractionService`, orquestación, excepciones de dominio | infraestructura (interfaces de cliente) | FastAPI, HTTP, transporte |
-| **Infraestructura / Clientes HTTP** | `src/bigpickle/infrastructure/` | Config (settings), `ExtractorClient` (httpx), adapter de streaming, tracing | nada hacia arriba | — |
+| **Presentación / Routers** | `src/paperextractor/presentation/` | Endpoints HTTP, DTOs de entrada/salida, handlers RFC 9457, inyección de dependencias | dominio (excepciones + interfaces) | httpx, config |
+| **Lógica de Negocio / Servicios** | `src/paperextractor/application/` | Interfaz `ExtractionService`, orquestación, excepciones de dominio | infraestructura (interfaces de cliente) | FastAPI, HTTP, transporte |
+| **Infraestructura / Clientes HTTP** | `src/paperextractor/infrastructure/` | Config (settings), `ExtractorClient` (httpx), adapter de streaming, tracing | nada hacia arriba | — |
 
 **Regla de dependencia:** las flechas apuntan de Presentación → Aplicación → Infraestructura. La Aplicación depende de **interfaces** (Protocol/ABC), nunca de clases concretas de infraestructura. La Infraestructura implementa esas interfaces. Inversión de dependencia vía inyección en `presentation/api/deps.py`.
 
@@ -70,8 +70,8 @@ Un POST reenviado puede duplicar el trabajo downstream. `retries=0` por defecto 
 ## 4. Árbol de Directorios del Proyecto
 
 ```
-PaperSoul-Microservicio-Extractor/          # repo que aloja a BigPickle (ver SPEC §13.1)
-├── SPEC-bigpickle.md
+PaperSoul-Microservicio-Extractor/          # repo que aloja a PaperExtractor (ver SPEC §13.1)
+├── SPEC-paperextractor.md
 ├── tasks/
 │   ├── plan.md
 │   └── todo.md
@@ -81,7 +81,7 @@ PaperSoul-Microservicio-Extractor/          # repo que aloja a BigPickle (ver SP
 ├── README.md
 ├── .github/workflows/ci.yml                # pytest + ruff + mypy (T8)
 ├── src/
-│   └── bigpickle/
+│   └── paperextractor/
 │       ├── __init__.py
 │       ├── main.py                         # app factory; monta router v1 + handlers de error
 │       ├── presentation/                   # CAPA 1: Presentación
@@ -105,7 +105,7 @@ PaperSoul-Microservicio-Extractor/          # repo que aloja a BigPickle (ver SP
 │       │   ├── __init__.py
 │       │   ├── interfaces.py               # AsyncByteSource (Protocol), ExtractionResult,
 │       │   │                               # ExtractionService (Protocol)
-│       │   ├── errors.py                   # BigPickleError, PayloadTooLargeError, InvalidRequestError,
+│       │   ├── errors.py                   # PaperExtractorError, PayloadTooLargeError, InvalidRequestError,
 │       │   │                               # ExtractionFailedError, UpstreamError,
 │       │   │                               # UpstreamTimeoutError, UpstreamUnavailableError,
 │       │   │                               # ConfigurationError
@@ -116,7 +116,7 @@ PaperSoul-Microservicio-Extractor/          # repo que aloja a BigPickle (ver SP
 │           ├── __init__.py
 │           ├── config/
 │           │   ├── __init__.py
-│           │   └── settings.py             # Settings (pydantic-settings, prefijo BIGPICKLE_)
+│           │   └── settings.py             # Settings (pydantic-settings, prefijo PAPEREXTRACTOR_)
 │           ├── http/
 │           │   ├── __init__.py
 │           │   ├── downstream/
@@ -199,7 +199,7 @@ class ExtractorClient(ABC):
 
 ### 5.3 `application/errors.py` — excepciones de dominio
 
-Jerarquía: `BigPickleError(Exception)` → cada tipo del mapa §8.1 de la SPEC. Cada excepción expone `status`, `problem_type`, `title`, `detail` para que el handler los use. El `source` (chunk de red) nunca entra en mensajes.
+Jerarquía: `PaperExtractorError(Exception)` → cada tipo del mapa §8.1 de la SPEC. Cada excepción expone `status`, `problem_type`, `title`, `detail` para que el handler los use. El `source` (chunk de red) nunca entra en mensajes.
 
 ### 5.4 `infrastructure/http/streaming.py` — primitiva de streaming
 
@@ -266,14 +266,14 @@ Cliente ── POST /api/v1/extract (multipart, campo "file") ──────
 ### 6.1 Pasos clave y garantías
 
 1. **Recepción (Uvicorn):** el frame HTTP se lee por partes; **nunca** se spoola multipart a disco porque nunca se invoca el parser multipart de Starlette. El router usa `Request` y construye un `AsyncByteSource` sobre `request.stream()`.
-2. **Guard de tamaño:** el iterador del adapter cuenta octetos. Al superar `BIGPICKLE_MAX_UPLOAD_BYTES` eleva `PayloadTooLargeError` → corta el envío → `413 problem+json`. El corte ocurre *durante* el streaming, sin haber leído todo.
+2. **Guard de tamaño:** el iterador del adapter cuenta octetos. Al superar `PAPEREXTRACTOR_MAX_UPLOAD_BYTES` eleva `PayloadTooLargeError` → corta el envío → `413 problem+json`. El corte ocurre *durante* el streaming, sin haber leído todo.
 3. **Forwarding 1:1:** mismos bytes, mismo `Content-Type` (se reenvía el `multipart/form-data; boundary=…` del cliente), `Content-Length` igual si el cliente lo mandó. `X-Request-Id` para trazabilidad.
 4. **Memoria/IO:** cola de lectura de 64 KB; el `AsyncClient` de httpx con pool acotado evita agotar descriptores; el cuerpo de respuesta (JSON del Extractor) es pequeño y se bufferiza en RAM. Nunca hay *blocking I/O*: todo es `async read/write`.
 5. **Traducción:** la respuesta del Extractor se mapea según la regla D4 → `200` envelope o RFC 9457.
 
 ¹ *filename*: se lee del primer chunk de cabecera multipart sin parsearlo completo (preanálisis ligero); si el preanálisis no puede extraerlo, se envía `""` (el downstream es la autoridad).
 
-### 6.2 Qué NO hace BigPickle (límites del ftujo)
+### 6.2 Qué NO hace PaperExtractor (límites del ftujo)
 
 - No materializa `UploadFile`, no toca `tempfile`, no escribe nada.
 - No re-ensambla el multipart (conserva el boundary original).
@@ -282,21 +282,21 @@ Cliente ── POST /api/v1/extract (multipart, campo "file") ──────
 
 ---
 
-## 7. Configuración (variables de entorno, prefix `BIGPICKLE_`)
+## 7. Configuración (variables de entorno, prefix `PAPEREXTRACTOR_`)
 
 `.env.example`:
 
 ```dotenv
-BIGPICKLE_HOST=0.0.0.0
-BIGPICKLE_PORT=8000
-BIGPICKLE_EXTRACTOR_BASE_URL=http://extractor:8000
-BIGPICKLE_MAX_UPLOAD_BYTES=52428800        # 50 MB
-BIGPICKLE_HTTP_TIMEOUT_CONNECT_SECONDS=5
-BIGPICKLE_HTTP_TIMEOUT_READ_SECONDS=120
-BIGPICKLE_HTTP_TIMEOUT_WRITE_SECONDS=120
-BIGPICKLE_HTTP_TIMEOUT_POOL_SECONDS=5
-BIGPICKLE_HTTP_MAX_CONNECTIONS=100
-BIGPICKLE_LOG_LEVEL=INFO
+PAPEREXTRACTOR_HOST=0.0.0.0
+PAPEREXTRACTOR_PORT=8000
+PAPEREXTRACTOR_EXTRACTOR_BASE_URL=http://extractor:8000
+PAPEREXTRACTOR_MAX_UPLOAD_BYTES=52428800        # 50 MB
+PAPEREXTRACTOR_HTTP_TIMEOUT_CONNECT_SECONDS=5
+PAPEREXTRACTOR_HTTP_TIMEOUT_READ_SECONDS=120
+PAPEREXTRACTOR_HTTP_TIMEOUT_WRITE_SECONDS=120
+PAPEREXTRACTOR_HTTP_TIMEOUT_POOL_SECONDS=5
+PAPEREXTRACTOR_HTTP_MAX_CONNECTIONS=100
+PAPEREXTRACTOR_LOG_LEVEL=INFO
 ```
 
 ---
@@ -351,7 +351,7 @@ Orden de construcción (dependencias hacia abajo; alto riesgo primero):
 | R2 | Proxies/balancers intermedios bufferizan request chunked (nginx `proxy_request_buffering on`) | Med | Documentación de despliegue: `proxy_request_buffering off`; `Content-Length` forwards cuando existe (D5) evita chunked en la mayoría de casos. |
 | R3 | Errores a mitad de stream (cliente corta / guard de tamaño) dejan estados parciales downstream | Med | El guard aborta el iterador → httpx cierra la conexión; el Extractor rechaza cuerpos truncados (sigue siendo su cobertura). Tests de corte a mitad de flujo. |
 | R4 | Timeout de lectura demasiado corto con PDFs lentos | Med | Read timeout configurable (120 s default, sección 7); `duration_ms` y logging permiten calibrar. |
-| R5 | Mensajes del Extractor contienen ruido / datos sensibles | Bajo | BigPickle solo propaga `detail` acotado del `{error}`; nunca headers ni cuerpo completo. |
+| R5 | Mensajes del Extractor contienen ruido / datos sensibles | Bajo | PaperExtractor solo propaga `detail` acotado del `{error}`; nunca headers ni cuerpo completo. |
 | R6 | `python-multipart` exigido de forma no intencional por FastAPI | Bajo | Agnostic; si se requiere parseo futuro, revisar límite de 1 MB de Starlette (spool a disco) — decisión consciente. |
 | R7 | Puerto/url del Extractor mal configurado en despliegue | Alto | `/ready` + logs de arranque avisan; `ConfigurationError` si faltó `EXTRACTOR_BASE_URL`. |
 | R8 | Workers de Uvicorn agotados por upstream lento | Med | Pool de conexiones y timeouts (D7); readiness para retirar tráfico; docs de escalado. |

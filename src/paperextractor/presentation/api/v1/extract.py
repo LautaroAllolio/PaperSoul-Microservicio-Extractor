@@ -24,11 +24,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from bigpickle.application.errors import InvalidRequestError
-from bigpickle.application.interfaces import ExtractionService
-from bigpickle.infrastructure.http.multipart import RequestByteSource, sniff_multipart_filename
-from bigpickle.presentation.api.deps import get_extraction_service, get_request_id
-from bigpickle.presentation.schemas.document import (
+from paperextractor.application.errors import InvalidRequestError
+from paperextractor.application.interfaces import ExtractionService
+from paperextractor.infrastructure.http.multipart import RequestByteSource, sniff_multipart_filename
+from paperextractor.presentation.api.deps import get_extraction_service, get_request_id
+from paperextractor.presentation.schemas.document import (
     DocumentExtractResponse,
     ExtractedDocument,
     OrchestrationMetadata,

@@ -16,7 +16,7 @@ class ExtractedDocument(BaseModel):
 
 
 class OrchestrationMetadata(BaseModel):
-    """BigPickle-side orchestration metadata, decoupled from the Extractor payload."""
+    """PaperExtractor-side orchestration metadata, decoupled from the Extractor payload."""
 
     model_config = ConfigDict(frozen=True)
 

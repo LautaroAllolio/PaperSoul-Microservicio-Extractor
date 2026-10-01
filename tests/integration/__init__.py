@@ -1,1 +1,1 @@
-"""Integration tests for the ``bigpickle`` package."""
+"""Integration tests for the ``paperextractor`` package."""

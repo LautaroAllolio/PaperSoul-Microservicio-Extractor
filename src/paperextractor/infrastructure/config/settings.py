@@ -1,4 +1,4 @@
-"""Runtime configuration loaded from the environment with a ``BIGPICKLE_`` prefix."""
+"""Runtime configuration loaded from the environment with a ``PAPEREXTRACTOR_`` prefix."""
 
 from functools import lru_cache
 
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """Application settings (plan.md § 7), hand-editable via env vars / ``.env``."""
 
     model_config = SettingsConfigDict(
-        env_prefix="BIGPICKLE_",
+        env_prefix="PAPEREXTRACTOR_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",

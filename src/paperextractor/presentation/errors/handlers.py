@@ -4,8 +4,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from bigpickle.application.errors import BigPickleError
-from bigpickle.presentation.schemas.problems import ProblemDetailError, ProblemDetails
+from paperextractor.application.errors import PaperExtractorError
+from paperextractor.presentation.schemas.problems import ProblemDetailError, ProblemDetails
 
 PROBLEM_URI_BASE = "https://papersoul.dev/problems/"
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -56,7 +56,7 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
 
 async def handle_domain_error(request: Request, exc: Exception) -> JSONResponse:
     """Domain exceptions → RFC 9457 from their exposed status/problem_type/title."""
-    assert isinstance(exc, BigPickleError)
+    assert isinstance(exc, PaperExtractorError)
     problem = ProblemDetails(
         type=f"{PROBLEM_URI_BASE}{exc.problem_type}",
         title=exc.title,
@@ -83,5 +83,5 @@ def register_error_handlers(app: FastAPI) -> None:
     """Wire the four global RFC 9457 handlers onto the application."""
     app.add_exception_handler(RequestValidationError, handle_validation_error)
     app.add_exception_handler(HTTPException, handle_http_exception)
-    app.add_exception_handler(BigPickleError, handle_domain_error)
+    app.add_exception_handler(PaperExtractorError, handle_domain_error)
     app.add_exception_handler(Exception, handle_internal_error)

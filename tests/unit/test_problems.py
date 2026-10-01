@@ -12,24 +12,24 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from starlette.requests import Request
 
-from bigpickle.application.errors import (
-    BigPickleError,
+from paperextractor.application.errors import (
     ConfigurationError,
     ExtractionFailedError,
     InvalidRequestError,
+    PaperExtractorError,
     PayloadTooLargeError,
     UpstreamError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
-from bigpickle.presentation.errors.handlers import (
+from paperextractor.presentation.errors.handlers import (
     handle_domain_error,
     handle_http_exception,
     handle_internal_error,
     handle_validation_error,
 )
 
-DOMAIN_ERRORS: list[tuple[type[BigPickleError], int, str, str]] = [
+DOMAIN_ERRORS: list[tuple[type[PaperExtractorError], int, str, str]] = [
     (InvalidRequestError, 422, "invalid-request", "Invalid Request"),
     (PayloadTooLargeError, 413, "payload-too-large", "Payload Too Large"),
     (ExtractionFailedError, 422, "extraction-failed", "Extraction Failed"),
@@ -67,14 +67,14 @@ def problem_request() -> Request:
 
 @pytest.mark.parametrize(("error_cls", "status", "problem_type", "title"), DOMAIN_ERRORS)
 def test_domain_error_exposes_status_problem_type_title(
-    error_cls: type[BigPickleError],
+    error_cls: type[PaperExtractorError],
     status: int,
     problem_type: str,
     title: str,
 ) -> None:
     error = error_cls("detail message")
 
-    assert isinstance(error, BigPickleError)
+    assert isinstance(error, PaperExtractorError)
     assert error.status == status
     assert error.problem_type == problem_type
     assert error.title == title
@@ -83,7 +83,7 @@ def test_domain_error_exposes_status_problem_type_title(
 
 async def test_domain_error_handler_returns_problem_json() -> None:
     app = FastAPI()
-    app.add_exception_handler(BigPickleError, handle_domain_error)
+    app.add_exception_handler(PaperExtractorError, handle_domain_error)
 
     @app.get("/extract")
     async def extract() -> None:

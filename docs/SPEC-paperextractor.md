@@ -1,6 +1,6 @@
-# SPEC: BigPickle — Microservicio Orquestador de Extracción (PaperSoul)
+# SPEC: PaperExtractor — Microservicio Orquestador de Extracción (PaperSoul)
 
-**Módulo:** `bigpickle`
+**Módulo:** `paperextractor`
 **Estado:** Propuesta — pendiente revisión humana
 **Fecha:** 2026-09-22
 **Fase:** 1 de SDD (Especificación y Contratos). El plan de implementación vive en `tasks/plan.md` y `tasks/todo.md`.
@@ -9,7 +9,7 @@
 
 ## 1. Objetivo
 
-BigPickle es el microservicio **orquestador** del ecosistema PaperSoul. Recibe un documento (PDF) por `multipart/form-data`, lo reenvía en **streaming de bytes** al microservicio downstream *Extractor* (sin almacenamiento intermedio en disco ni en memoria completa) y responde al cliente con un **envelope propio, estable y desacoplado** del payload interno del Extractor.
+PaperExtractor es el microservicio **orquestador** del ecosistema PaperSoul. Recibe un documento (PDF) por `multipart/form-data`, lo reenvía en **streaming de bytes** al microservicio downstream *Extractor* (sin almacenamiento intermedio en disco ni en memoria completa) y responde al cliente con un **envelope propio, estable y desacoplado** del payload interno del Extractor.
 
 Todos los errores se exponen cumpliendo estrictamente **RFC 9457 (Problem Details for HTTP APIs)** con `Content-Type: application/problem+json`.
 
@@ -26,13 +26,13 @@ Todos los errores se exponen cumpliendo estrictamente **RFC 9457 (Problem Detail
 **Confirmados con el humano:**
 1. Los artefactos (SPEC, plan, código) vivirán en este repositorio (`PaperSoul-Microservicio-Extractor`, ver Preguntas Abiertas #1).
 2. Gestor de dependencias **`uv`** y **Python 3.12**.
-3. BigPickle **wrapea** la respuesta del Extractor en su propio DTO (no passthrough directo).
+3. PaperExtractor **wrapea** la respuesta del Extractor en su propio DTO (no passthrough directo).
 4. Endpoints públicos en esta fase: **solo** extracción (`POST /api/v1/extract`) + **`GET /health`** y **`GET /ready`**.
 
 **Asumidos técnicamente (corrígeme si no):**
-5. El Extractor corre en `http://extractor:8000` (dirección externa a BigPickle, configurable por entorno).
+5. El Extractor corre en `http://extractor:8000` (dirección externa a PaperExtractor, configurable por entorno).
 6. El contrato downstream del Extractor es el provisto: `POST /api/v1/extract`, campo `file`, payloads de éxito y error indicados.
-7. BigPickle **no parsea** el `multipart/form-data` del cliente con `python-multipart`: reenvía el flujo de bytes crudo (ver `tasks/plan.md`, decisión de arquitectura). Por eso el campo `file` nunca se materializa como objeto, solo se valida a nivel de transporte.
+7. PaperExtractor **no parsea** el `multipart/form-data` del cliente con `python-multipart`: reenvía el flujo de bytes crudo (ver `tasks/plan.md`, decisión de arquitectura). Por eso el campo `file` nunca se materializa como objeto, solo se valida a nivel de transporte.
 8. El runtime de despliegue es Uvicorn, que acepta *request bodies chunked* (`Transfer-Encoding: chunked`).
 9. No se persiste nada del contenido del archivo en disco (requisito duro del negocio).
 
@@ -54,7 +54,7 @@ Todos los errores se exponen cumpliendo estrictamente **RFC 9457 (Problem Detail
 | Lint / formato | ruff | — |
 | Tipado estático | mypy (estricto) | — |
 
-> `python-multipart` NO se declara como dependencia: BigPickle no parsea multipart (requisito de streaming sin disco). Si en el futuro se necesita parsear, se agrega (Ask first).
+> `python-multipart` NO se declara como dependencia: PaperExtractor no parsea multipart (requisito de streaming sin disco). Si en el futuro se necesita parsear, se agrega (Ask first).
 
 ---
 
@@ -65,10 +65,10 @@ Todos los errores se exponen cumpliendo estrictamente **RFC 9457 (Problem Detail
 uv sync
 
 # Servidor de desarrollo (reload)
-uv run uvicorn bigpickle.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn paperextractor.main:app --reload --host 0.0.0.0 --port 8000
 
 # Servidor de producción (n workers)
-uv run uvicorn bigpickle.main:app --host 0.0.0.0 --port 8000 --workers 2
+uv run uvicorn paperextractor.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 # Tests (unit + integration)
 uv run pytest
@@ -83,7 +83,7 @@ uv run ruff check .
 uv run ruff format --check .
 
 # Tipado
-uv run mypy bigpickle
+uv run mypy paperextractor
 ```
 
 ---
@@ -91,25 +91,25 @@ uv run mypy bigpickle
 ## 5. Estructura del proyecto
 
 ```
-src/bigpickle/            → código fuente (3 capas: presentation/application/infrastructure)
+src/paperextractor/            → código fuente (3 capas: presentation/application/infrastructure)
 tests/                    → unit, integration, contract
 tasks/                    → plan.md y todo.md (planificación SDD)
-SPEC-bigpickle.md         → este documento
+SPEC-paperextractor.md         → este documento
 ```
 
 El árbol completo con responsabilidad por módulo está en `tasks/plan.md` § 5.
 
 ---
 
-## 6. Contratos Públicos (API externa de BigPickle)
+## 6. Contratos Públicos (API externa de PaperExtractor)
 
 ### 6.1 `POST /api/v1/extract` — Orquestar extracción de documento
 
 **Request**
 - `Content-Type: multipart/form-data; boundary=<boundary>`
 - Campo único relevante: `file` (archivo, p. ej. PDF).
-- Límite de tamaño configurable `BIGPICKLE_MAX_UPLOAD_BYTES` (default `52_428_800` ≈ 50 MB). Exceso → `413` Problem Details.
-- BigPickle **no spoola a disco**: reenvía el cuerpo crudo aguas abajo (ver § 9 y `tasks/plan.md`).
+- Límite de tamaño configurable `PAPEREXTRACTOR_MAX_UPLOAD_BYTES` (default `52_428_800` ≈ 50 MB). Exceso → `413` Problem Details.
+- PaperExtractor **no spoola a disco**: reenvía el cuerpo crudo aguas abajo (ver § 9 y `tasks/plan.md`).
 
 **Response `200 OK` — `application/json`**
 
@@ -137,7 +137,7 @@ Envelope propio (desacoplado del payload del Extractor):
 | `document.page_count` | `int` | Nº de páginas |
 | `document.extraction_method` | `string` | Método usado por el Extractor (`pymupdf`) |
 | `orchestration.downstream_service` | `string` | `"extractor"` fijo |
-| `orchestration.duration_ms` | `int` | Tiempo de orquestación medido en BigPickle |
+| `orchestration.duration_ms` | `int` | Tiempo de orquestación medido en PaperExtractor |
 
 **Errors** → siempre RFC 9457 (§ 8).
 
@@ -148,7 +148,7 @@ Sin dependencias externas. Responde siempre que el proceso está vivo.
 ```json
 {
   "status": "ok",
-  "service": "bigpickle",
+  "service": "paperextractor",
   "version": "0.1.0",
   "timestamp": "2026-09-22T12:00:00Z"
 }
@@ -300,13 +300,13 @@ Ejemplo de respuesta del caso 4:
 POST {EXTRACTOR_BASE_URL}/api/v1/extract
 Content-Type: multipart/form-data; boundary=<boundary del cliente>
 Content-Length: <igual a la recibida, si el cliente la mandó>
-X-Request-Id: <request_id de BigPickle>
+X-Request-Id: <request_id de PaperExtractor>
 
 <body: mismísimos bytes recibidos del cliente, sin re-codificar>
 ```
 
 - El body es el **flujo de bytes inalterado**. No se re-ensambla multipart; el propio Extractor lo parsea.
-- Si BigPickle no conoce el `Content-Length` de entrada (no venía), se envía con *transfer chunked* (soportado por Uvicorn/h11).
+- Si PaperExtractor no conoce el `Content-Length` de entrada (no venía), se envía con *transfer chunked* (soportado por Uvicorn/h11).
 
 ### 9.2 Payloads del Extractor
 
@@ -328,16 +328,16 @@ X-Request-Id: <request_id de BigPickle>
 }
 ```
 
-### 9.3 Traducción downstream → BigPickle (RFC 9457)
+### 9.3 Traducción downstream → PaperExtractor (RFC 9457)
 
-| Downstream devuelve | BigPickle responde al cliente |
+| Downstream devuelve | PaperExtractor responde al cliente |
 |---|---|
 | `200` + payload éxito validado | `200` + envelope propio (§ 6.1) |
 | `422` + `{error}` | `422` `extraction-failed`; `detail` = mensaje del Extractor (caso 4) |
 | `500` + `{error}` | `502` `upstream-error`; `detail` = mensaje del Extractor (caso 5) |
 | timeout / DNS / connection refused | `504` `upstream-timeout` o `502` `upstream-unavailable` (casos 6–7) |
 
-**Regla:** los `4xx` del Extractor se traducen a `4xx` (responsabilidad del cliente); los `5xx`/fallas de red a `5xx` de BigPickle (502/504). BigPickle nunca filtra detalles internos de red al cliente; acota a `title`/`detail` controlados.
+**Regla:** los `4xx` del Extractor se traducen a `4xx` (responsabilidad del cliente); los `5xx`/fallas de red a `5xx` de PaperExtractor (502/504). PaperExtractor nunca filtra detalles internos de red al cliente; acota a `title`/`detail` controlados.
 
 ---
 
@@ -354,7 +354,7 @@ X-Request-Id: <request_id de BigPickle>
 | Contract (opcional) | `tests/contract/` | End-to-end contra Extractor real (marcador `-m contract`) |
 
 **Pruebas que NO pueden faltar (criterio de fondo):**
-- **Byte-identical:** el body que recibe el Extractor mock son exactamente los bytes recibidos por BigPickle.
+- **Byte-identical:** el body que recibe el Extractor mock son exactamente los bytes recibidos por PaperExtractor.
 - **No-disk:** durante el flujo no se crea/abre ningún archivo temporal con contenido del documento (`tempfile`/tmp dir libres).
 - **RFC 9457:** cada escenario de error responde `Content-Type: application/problem+json` con campos `type/title/status/detail/instance`.
 - **Envelope:** el cliente nunca ve el payload crudo del Extractor.
@@ -364,7 +364,7 @@ X-Request-Id: <request_id de BigPickle>
 ## 11. Límites (Boundaries)
 
 **Always:**
-- Correr `uv run ruff check .`, `uv run mypy bigpickle` y `uv run pytest` antes de commitear.
+- Correr `uv run ruff check .`, `uv run mypy paperextractor` y `uv run pytest` antes de commitear.
 - Un test nuevo por cada ruta de error nueva.
 - `Content-Type: application/problem+json` en toda respuesta de error.
 - Timestamps en UTC (`Z`).
@@ -400,7 +400,7 @@ Cumplidos y verificables:
 
 ## 13. Preguntas Abiertas
 
-1. **Nombre del repo:** este repo se llama `PaperSoul-Microservicio-Extractor` y el README aún dice eso, pero alojará a BigPickle. ¿Lo renombramos a `PaperSoul-Microservicio-Orquestador` / `PaperSoul-BigPickle` y actualizamos el README?
+1. **Nombre del repo:** este repo se llama `PaperSoul-Microservicio-Extractor` y el README aún dice eso, pero alojará a PaperExtractor. ¿Lo renombramos a `PaperSoul-Microservicio-Orquestador` y actualizamos el README?
 2. **MIME whitelist:** ¿forzar `application/pdf` en el campo `file`, o aceptar cualquier tipo que el Extractor pueda leer (p. ej. `image/tiff`)? (Default propuesto: validar solo que exista el campo y el límite de tamaño; la decisión de "¿es legible?" la toma el Extractor.)
 3. **Compatibilidad de httpx:** confirmar en la implementación (tareas T3/T4) el comportamiento exacto de `httpx.AsyncByteStream` + `Content-Length` con body streaming, y el soporte de *chunked request* de Uvicorn. Mitigación documentada en `tasks/plan.md` (R1/R2).
 4. **Auth / rate limiting:** ¿entran en una fase posterior?

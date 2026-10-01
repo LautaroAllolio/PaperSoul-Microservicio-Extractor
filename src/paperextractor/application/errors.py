@@ -1,4 +1,4 @@
-"""Domain exceptions for BigPickle (SPEC §8.1 error map).
+"""Domain exceptions for PaperExtractor (SPEC §8.1 error map).
 
 Each subclass maps to one row of the error table and exposes the
 ``status``/``problem_type``/``title``/``detail`` contract that the
@@ -6,8 +6,8 @@ presentation layer reads to build RFC 9457 responses.
 """
 
 
-class BigPickleError(Exception):
-    """Base class for every BigPickle domain failure."""
+class PaperExtractorError(Exception):
+    """Base class for every PaperExtractor domain failure."""
 
     status: int
     problem_type: str
@@ -18,7 +18,7 @@ class BigPickleError(Exception):
         self.detail = detail
 
 
-class InvalidRequestError(BigPickleError):
+class InvalidRequestError(PaperExtractorError):
     """Malformed request missing required multipart fields or boundary."""
 
     status = 422
@@ -26,15 +26,15 @@ class InvalidRequestError(BigPickleError):
     title = "Invalid Request"
 
 
-class PayloadTooLargeError(BigPickleError):
-    """Upload exceeds ``BIGPICKLE_MAX_UPLOAD_BYTES`` (streaming guard)."""
+class PayloadTooLargeError(PaperExtractorError):
+    """Upload exceeds ``PAPEREXTRACTOR_MAX_UPLOAD_BYTES`` (streaming guard)."""
 
     status = 413
     problem_type = "payload-too-large"
     title = "Payload Too Large"
 
 
-class ExtractionFailedError(BigPickleError):
+class ExtractionFailedError(PaperExtractorError):
     """Extractor rejected the document (422 from downstream)."""
 
     status = 422
@@ -42,7 +42,7 @@ class ExtractionFailedError(BigPickleError):
     title = "Extraction Failed"
 
 
-class UpstreamError(BigPickleError):
+class UpstreamError(PaperExtractorError):
     """Extractor failed with a 5xx or an unexpected response shape."""
 
     status = 502
@@ -50,7 +50,7 @@ class UpstreamError(BigPickleError):
     title = "Upstream Error"
 
 
-class UpstreamTimeoutError(BigPickleError):
+class UpstreamTimeoutError(PaperExtractorError):
     """A connection or read timeout occurred against the Extractor."""
 
     status = 504
@@ -58,7 +58,7 @@ class UpstreamTimeoutError(BigPickleError):
     title = "Upstream Timeout"
 
 
-class UpstreamUnavailableError(BigPickleError):
+class UpstreamUnavailableError(PaperExtractorError):
     """Extractor unreachable at the network level (refused/DNS/timeout)."""
 
     status = 502
@@ -66,8 +66,8 @@ class UpstreamUnavailableError(BigPickleError):
     title = "Upstream Unavailable"
 
 
-class ConfigurationError(BigPickleError):
-    """BigPickle is misconfigured (e.g. missing extractor URL)."""
+class ConfigurationError(PaperExtractorError):
+    """PaperExtractor is misconfigured (e.g. missing extractor URL)."""
 
     status = 500
     problem_type = "configuration-error"

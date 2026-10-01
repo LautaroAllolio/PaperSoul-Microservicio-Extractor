@@ -23,10 +23,10 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Request
 
-from bigpickle.application.interfaces import ExtractionService
-from bigpickle.application.services.orchestrator import ExtractionOrchestrator
-from bigpickle.infrastructure.http.downstream.base import ExtractorClient
-from bigpickle.infrastructure.tracing import new_request_id
+from paperextractor.application.interfaces import ExtractionService
+from paperextractor.application.services.orchestrator import ExtractionOrchestrator
+from paperextractor.infrastructure.http.downstream.base import ExtractorClient
+from paperextractor.infrastructure.tracing import new_request_id
 
 EXTRACTOR_CLIENT = "extractor_client"
 

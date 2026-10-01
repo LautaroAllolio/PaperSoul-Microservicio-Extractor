@@ -50,5 +50,5 @@ class ExtractionService(Protocol):
         content_type: str,
         content_length: int | None,
     ) -> ExtractionResult:
-        """Consume ``source`` and return the extraction result or raise a ``BigPickleError``."""
+        """Consume ``source``, return the result, or raise a ``PaperExtractorError``."""
         ...

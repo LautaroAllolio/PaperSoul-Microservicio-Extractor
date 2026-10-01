@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from bigpickle.presentation.schemas.document import (
+from paperextractor.presentation.schemas.document import (
     DocumentExtractResponse,
     ExtractedDocument,
     OrchestrationMetadata,
 )
-from bigpickle.presentation.schemas.health import HealthResponse, ReadinessResponse
-from bigpickle.presentation.schemas.problems import ProblemDetailError, ProblemDetails
+from paperextractor.presentation.schemas.health import HealthResponse, ReadinessResponse
+from paperextractor.presentation.schemas.problems import ProblemDetailError, ProblemDetails
 
 REQUEST_ID = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
 EXTRACTED_TEXT = "Texto plano extraído del PDF..."
@@ -63,12 +63,12 @@ def test_orchestration_metadata_rejects_unknown_downstream_service() -> None:
 
 def test_health_response_serializes_to_spec_6_2() -> None:
     response = HealthResponse(
-        status="ok", service="bigpickle", version="0.1.0", timestamp=TIMESTAMP
+        status="ok", service="paperextractor", version="0.1.0", timestamp=TIMESTAMP
     )
 
     assert json.loads(response.model_dump_json()) == {
         "status": "ok",
-        "service": "bigpickle",
+        "service": "paperextractor",
         "version": "0.1.0",
         "timestamp": "2026-09-22T12:00:00Z",
     }
@@ -150,7 +150,7 @@ SCHEMA_FIELDS: list[tuple[Callable[[], BaseModel], str]] = [
     ),
     (
         lambda: HealthResponse(
-            status="ok", service="bigpickle", version="0.1.0", timestamp=TIMESTAMP
+            status="ok", service="paperextractor", version="0.1.0", timestamp=TIMESTAMP
         ),
         "service",
     ),

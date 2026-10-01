@@ -1,7 +1,7 @@
 """RED-phase contract tests for Task 5's ``ExtractionOrchestrator``.
 
-``bigpickle.application.services.orchestrator`` and
-``bigpickle.infrastructure.tracing`` do not exist yet, so collection must fail
+``paperextractor.application.services.orchestrator`` and
+``paperextractor.infrastructure.tracing`` do not exist yet, so collection must fail
 until the production code is implemented.
 
 Design contract pinned here (task 5 + plan.md § 3, § 5.1, § 6.1):
@@ -28,7 +28,7 @@ import httpx
 import pytest
 import respx
 
-from bigpickle.application.errors import (
+from paperextractor.application.errors import (
     ConfigurationError,
     ExtractionFailedError,
     InvalidRequestError,
@@ -37,20 +37,20 @@ from bigpickle.application.errors import (
     UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
-from bigpickle.application.interfaces import ExtractionService
-from bigpickle.application.services import orchestrator as orchestrator_module
-from bigpickle.application.services.orchestrator import ExtractionOrchestrator
-from bigpickle.infrastructure.config.settings import Settings
-from bigpickle.infrastructure.http.downstream.base import ExtractorClient
-from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
-from bigpickle.infrastructure.http.downstream.models import ExtractorSuccess
-from bigpickle.infrastructure.tracing import new_request_id
+from paperextractor.application.interfaces import ExtractionService
+from paperextractor.application.services import orchestrator as orchestrator_module
+from paperextractor.application.services.orchestrator import ExtractionOrchestrator
+from paperextractor.infrastructure.config.settings import Settings
+from paperextractor.infrastructure.http.downstream.base import ExtractorClient
+from paperextractor.infrastructure.http.downstream.http_client import HttpExtractorClient
+from paperextractor.infrastructure.http.downstream.models import ExtractorSuccess
+from paperextractor.infrastructure.tracing import new_request_id
 from tests.fakes import ByteSource
 
 BASE_URL = "http://extractor:8000"
 EXTRACT_URL = f"{BASE_URL}/api/v1/extract"
 MAX_UPLOAD_BYTES = 4096
-CONTENT_TYPE = 'multipart/form-data; boundary="----BigPickleBoundary"'
+CONTENT_TYPE = 'multipart/form-data; boundary="----PaperExtractorBoundary"'
 FILENAME = "contrato.pdf"
 PAYLOAD = b"%PDF-1.7 payload"
 EXTRACTED_TEXT = "Texto plano extraído del PDF..."
@@ -342,6 +342,6 @@ def test_orchestrator_never_imports_http_or_concrete_infrastructure() -> None:
 
     assert "httpx" not in imported
     assert "fastapi" not in imported
-    assert "bigpickle.infrastructure.http.streaming" not in imported
-    assert "bigpickle.infrastructure.http.downstream.http_client" not in imported
-    assert "bigpickle.infrastructure.http.downstream.base" in imported
+    assert "paperextractor.infrastructure.http.streaming" not in imported
+    assert "paperextractor.infrastructure.http.downstream.http_client" not in imported
+    assert "paperextractor.infrastructure.http.downstream.base" in imported

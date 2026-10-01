@@ -1,6 +1,6 @@
-# Tasks — BigPickle (Orquestador PaperSoul)
+# Tasks — PaperExtractor (Orquestador PaperSoul)
 
-Task list operativo de la implementación de BigPickle. Detalle técnico en `tasks/plan.md`; contrato y especificación en `SPEC-bigpickle.md`. SDD Fase 1 y 2 completas — pendiente de aprobación humana antes de implementar.
+Task list operativo de la implementación de PaperExtractor. Detalle técnico en `tasks/plan.md`; contrato y especificación en `SPEC-paperextractor.md`. SDD Fase 1 y 2 completas — pendiente de aprobación humana antes de implementar.
 
 ---
 
@@ -8,25 +8,25 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 ### Task 1: Scaffold del proyecto con uv y esqueleto en 3 capas
 
-**Description:** Crear el proyecto Python 3.12 con `uv` (`pyproject.toml`, `.python-version`, `.venv`), el paquete `src/bigpickle/` con los directorios `presentation/`, `application/`, `infrastructure/` vacíos, `main.py` con app factory mínima, y `infrastructure/config/settings.py` (pydantic-settings, prefijo `BIGPICKLE_`) con todas las variables de la sección 7 del plan.
+**Description:** Crear el proyecto Python 3.12 con `uv` (`pyproject.toml`, `.python-version`, `.venv`), el paquete `src/paperextractor/` con los directorios `presentation/`, `application/`, `infrastructure/` vacíos, `main.py` con app factory mínima, y `infrastructure/config/settings.py` (pydantic-settings, prefijo `PAPEREXTRACTOR_`) con todas las variables de la sección 7 del plan.
 
 **Acceptance criteria:**
-- [x] `uv sync` instala sin errores; `bigpickle` es importable desde `src/` (editable).
+- [x] `uv sync` instala sin errores; `paperextractor` es importable desde `src/` (editable).
 - [x] `main.py` levanta una FastAPI app vacía con `GET /` de prueba respondiendo `200`.
 - [x] `Settings` carga desde entorno con defaults correctos (url del Extractor, límites de tamaño/timeout, pool).
-- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` pasan en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
+- [x] `uv run mypy -p paperextractor` y `uv run ruff check .` pasan en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
 
 **Verification:**
 - [x] Tests pass: `uv run pytest` (test básico de arranque de app/settings).
-- [x] Build succeeds: `uv run uvicorn bigpickle.main:app --app-dir src` inicia y responde.
-- [x] Manual check: `python -c "from bigpickle.main import create_app"` sin errores.
+- [x] Build succeeds: `uv run uvicorn paperextractor.main:app --app-dir src` inicia y responde.
+- [x] Manual check: `python -c "from paperextractor.main import create_app"` sin errores.
 
 **Dependencies:** None
 
 **Files likely touched:**
 - `pyproject.toml`, `.python-version`, `.env.example`
-- `src/bigpickle/__init__.py`, `src/bigpickle/main.py`
-- `src/bigpickle/config/settings.py` (+ `__init__`s de capas)
+- `src/paperextractor/__init__.py`, `src/paperextractor/main.py`
+- `src/paperextractor/config/settings.py` (+ `__init__`s de capas)
 - `tests/unit/test_settings.py`, `tests/conftest.py`
 
 **Estimated scope:** Medium (5-6 archivos).
@@ -46,14 +46,14 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/unit/test_schemas.py tests/unit/test_problems.py`.
 - [x] Manual check: POST inválido a la app devuelve body RFC 9457 completo. *(verificado: `HTTPException` vivo → `application/problem+json`; `RequestValidationError`/dominio/genérico cubiertos por tests; body endpoint completo a partir de Task 6)*
-- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
+- [x] `uv run mypy -p paperextractor` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada)*
 
 **Dependencies:** Task 1
 
 **Files likely touched:**
-- `src/bigpickle/presentation/schemas/{document,health,problems}.py`
-- `src/bigpickle/presentation/errors/handlers.py`
-- `src/bigpickle/application/errors.py` (definir jerarquía de excepciones de dominio, base)
+- `src/paperextractor/presentation/schemas/{document,health,problems}.py`
+- `src/paperextractor/presentation/errors/handlers.py`
+- `src/paperextractor/application/errors.py` (definir jerarquía de excepciones de dominio, base)
 - `tests/unit/test_schemas.py`, `tests/unit/test_problems.py`
 
 **Estimated scope:** Medium (4-5 archivos).
@@ -69,7 +69,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 ### Task 3: Streaming sin disco (`SourceForwardingStream` + guard de tamaño)
 
-**Description:** Implementar `infrastructure/http/streaming.py`: el adapter `SourceForwardingStream(httpx.AsyncByteStream)` que itera una `AsyncByteSource` en chunks de 64 KB, expone `get_content_length()` (devuelto desde el `Content-Length` entrante o `None` → chunked), y aborta con `PayloadTooLargeError` al superar `BIGPICKLE_MAX_UPLOAD_BYTES`, sin buffering del archivo. Escribir primero la prueba de humo R1: verificar de forma empírica que httpx envía async byte streams con length correcto.
+**Description:** Implementar `infrastructure/http/streaming.py`: el adapter `SourceForwardingStream(httpx.AsyncByteStream)` que itera una `AsyncByteSource` en chunks de 64 KB, expone `get_content_length()` (devuelto desde el `Content-Length` entrante o `None` → chunked), y aborta con `PayloadTooLargeError` al superar `PAPEREXTRACTOR_MAX_UPLOAD_BYTES`, sin buffering del archivo. Escribir primero la prueba de humo R1: verificar de forma empírica que httpx envía async byte streams con length correcto.
 
 **Acceptance criteria:**
 - [x] El iterador emite exactamente los bytes recibidos, en orden, sin duplicaciones ni pérdidas (test byte-identical unitario).
@@ -80,17 +80,17 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/unit/test_streaming.py` (15 passed; suite completa 45 passed).
 - [x] Manual/R1: prueba de humo con `httpx.AsyncClient` contra `ASGITransport` verificando un request body streamed con y sin `Content-Length`.
-- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada. `ruff format --check` limpio en `src/` y `tests/`; los 2 `.md` de `docs/` con diferencias de format son preexistentes y se limpian en T9)*
+- [x] `uv run mypy -p paperextractor` y `uv run ruff check .` en limpio. *(mypy 2.3.1 no resuelve el nombre bare con layout `src/`; `-p` es la forma verificada. `ruff format --check` limpio en `src/` y `tests/`; los 2 `.md` de `docs/` con diferencias de format son preexistentes y se limpian en T9)*
 
 **Hallazgo R1 (resuelto empíricamente con httpx 0.28.1):** httpx **no** consulta `get_content_length()` sobre `AsyncByteStream`; para cualquier async iterable fuerza `Transfer-Encoding: chunked`. El `Content-Length` solo llega al cable si el **caller** setea el header — y entonces httpx descarta su propio `Transfer-Encoding` (`Request._prepare`). Consecuencia para D5/T4: `HttpExtractorClient` debe pasar `Content-Length: str(stream.get_content_length())` explícitamente cuando no sea `None`; `get_content_length()` queda como API del adapter, no como hook de httpx. Ambos caminos (con length y chunked) quedaron verificados byte a byte.
 
 **Dependencies:** Task 1
 
 **Files likely touched:**
-- `src/bigpickle/infrastructure/http/streaming.py` → `SourceForwardingStream` + guard de tamaño (`_SizeGuard`)
-- `src/bigpickle/infrastructure/http/__init__.py` (nuevo, paquete)
-- `src/bigpickle/application/interfaces.py` (`AsyncByteSource`, `ExtractionResult`, `ExtractionService`)
-- `src/bigpickle/application/errors.py` (`PayloadTooLargeError` — ya existía de T2, sin cambios)
+- `src/paperextractor/infrastructure/http/streaming.py` → `SourceForwardingStream` + guard de tamaño (`_SizeGuard`)
+- `src/paperextractor/infrastructure/http/__init__.py` (nuevo, paquete)
+- `src/paperextractor/application/interfaces.py` (`AsyncByteSource`, `ExtractionResult`, `ExtractionService`)
+- `src/paperextractor/application/errors.py` (`PayloadTooLargeError` — ya existía de T2, sin cambios)
 - `tests/unit/test_streaming.py`
 
 **Estimated scope:** Medium (2-3 archivos). Alto riesgo → temprano (R1/R2).
@@ -109,14 +109,14 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/unit` (incl. tests nuevos del cliente con `respx`). *(GREEN: 78 tests en `tests/unit/test_http_client.py`; suite completa del proyecto 123 passed)*
-- [x] `uv run mypy -p bigpickle` y `uv run ruff check .` en limpio. *(sobre el paquete y la suite; `ruff format --check src tests` limpio)*
+- [x] `uv run mypy -p paperextractor` y `uv run ruff check .` en limpio. *(sobre el paquete y la suite; `ruff format --check src tests` limpio)*
 
 **Estado:** 🟢 GREEN. `downstream/{__init__,base,models,http_client}.py` implementados. `errors.py` y `settings.py` no requirieron cambios: la jerarquía de dominio (T2) y los timeouts/pool (T1) ya cubrían el contrato.
 
 **Contrato fijado por los tests (decisiones que la descripción de la Task no explicaba):**
 - **Firma:** `HttpExtractorClient(settings)` + `await aclose()`; `forward(source, *, content_type, content_length, request_id) -> ExtractorSuccess` y `ping() -> None` (plan §5.2). El cliente construye internamente el `SourceForwardingStream` con `max_upload_bytes` de settings (de ahí que `forward` reciba la `source`, no el stream).
 - **`Content-Length`:** el cliente debe setear el header explícitamente cuando `content_length` no sea `None`, y omitirlo cuando sea `None` (httpx cae a `Transfer-Encoding: chunked`). Consecuencia directa del hallazgo R1 de T3. Aislado en `_build_headers()`.
-- **`base_url` con slash final:** normalizado con `rstrip("/")`; sin eso, `BIGPICKLE_EXTRACTOR_BASE_URL=http://extractor:8000/` produce `//api/v1/extract` y httpx **no** normaliza (cubierto por `test_forward_does_not_duplicate_the_path_separator`, añadido en ciclo red→green durante el GREEN).
+- **`base_url` con slash final:** normalizado con `rstrip("/")`; sin eso, `PAPEREXTRACTOR_EXTRACTOR_BASE_URL=http://extractor:8000/` produce `//api/v1/extract` y httpx **no** normaliza (cubierto por `test_forward_does_not_duplicate_the_path_separator`, añadido en ciclo red→green durante el GREEN).
 - **Traducción:** `httpx.TimeoutException` (cualquier subtype) → `UpstreamTimeoutError`; el resto de `httpx.RequestError` de red → `UpstreamUnavailableError`. `4xx` → `ExtractionFailedError` (cualquier `4xx`, no solo `422`: lo exige D4 y es la única excepción de dominio 4xx) y `5xx` → `UpstreamError`. `PayloadTooLargeError` del guard se propaga sin re-clasificar (no es `httpx.RequestError`, así que las cláusulas `except` no lo tocan).
 - **Status inesperados:** cualquier status que no sea `200` (201/202/204/302…) → `UpstreamError`; solo `200` es éxito.
 - **`detail`:** es exactamente el string de `{"error": …}` del Extractor. Si el body no lo trae, se usa un mensaje controlado — nunca el body crudo (verificado con un canario en el payload).
@@ -136,9 +136,9 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 **Dependencies:** Task 1, Task 3
 
 **Files likely touched:**
-- `src/bigpickle/infrastructure/http/downstream/{__init__,base,models,http_client}.py`
-- `src/bigpickle/application/errors.py` (excepciones de dominio — ya completas de T2, sin cambios)
-- `src/bigpickle/infrastructure/config/settings.py` (timeouts/pool — ya completos de T1, sin cambios)
+- `src/paperextractor/infrastructure/http/downstream/{__init__,base,models,http_client}.py`
+- `src/paperextractor/application/errors.py` (excepciones de dominio — ya completas de T2, sin cambios)
+- `src/paperextractor/infrastructure/config/settings.py` (timeouts/pool — ya completos de T1, sin cambios)
 - `tests/unit/test_http_client.py`
 
 **Estimated scope:** Medium (4-5 archivos).
@@ -167,7 +167,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/unit/test_orchestrator.py`. *(GREEN: 21 passed; suite completa del proyecto **144 passed**)*
-- [x] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 34 files already formatted; `mypy -p bigpickle` → Success, no issues in 24 source files)*
+- [x] `uv run mypy paperextractor` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 34 files already formatted; `mypy -p paperextractor` → Success, no issues in 24 source files)*
 
 **Estado:** 🟢 GREEN. Implementados `infrastructure/tracing.py`, `application/services/__init__.py` y `application/services/orchestrator.py`; `interfaces.py` solo recibió `@runtime_checkable` sobre el Protocol que ya fijó T3. **Los 21 tests del RED pasaron sin modificación alguna**: cero cambios en `test_orchestrator.py` entre RED y GREEN, que es la prueba de que el RED describía el contrato y no la implementación.
 
@@ -178,7 +178,7 @@ Task list operativo de la implementación de BigPickle. Detalle técnico en `tas
 - **ISP** — El orquestador depende de `ExtractorClient` (2 métodos) y solo usa `forward()`. No toca `ping()`, que es del caso de uso de readiness (T7). Ningún cliente implementa métodos que no se usan.
 - **DIP** — No construye nada: `grep` sobre el módulo solo encuentra `self._new_request_id = new_request_id` (asignación de referencia). Depende de la ABC `ExtractorClient` y de un `Callable[[], str]`, ambos abstracciones.
 
-**Auditoría de capas ejecutada sobre `src/bigpickle/application/`:** el **único** import de infraestructura es `infrastructure.http.downstream.base` (el puerto). Cero `httpx`, cero `fastapi`, cero `presentation`, cero `config`. Coincide con la tabla de plan §3 y con el test `..._never_imports_http_or_concrete_infrastructure`, que lo verifica por AST en cada corrida en vez de dejarlo escrito en un docstring.
+**Auditoría de capas ejecutada sobre `src/paperextractor/application/`:** el **único** import de infraestructura es `infrastructure.http.downstream.base` (el puerto). Cero `httpx`, cero `fastapi`, cero `presentation`, cero `config`. Coincide con la tabla de plan §3 y con el test `..._never_imports_http_or_concrete_infrastructure`, que lo verifica por AST en cada corrida en vez de dejarlo escrito en un docstring.
 
 **graphify como apoyo al GREEN:** `graphify path "ExtractionOrchestrator" "HttpExtractorClient"` responde **`No directed path found between 'ExtractionOrchestrator' and 'HttpExtractorClient'`**, y `graphify explain "Dependency Inversion"` muestra que el nodo conecta solo con `ExtractorClient Interface` y `ExtractionService Interface`. El grafo ya representa la regla de capas y la implementación la respeta sin atajos. Nota honesta: el grafo está en commit `c4196ba`, anterior a T3/T4 — cubre `SourceForwardingStream`, `HttpExtractorClient` y `ExtractionOrchestrator` (este último vía `plan.md`), pero **`tracing`/`new_request_id` no aparecen**, correcto porque los archivos no existían. Conviene `/graphify --update` antes del Checkpoint B.
 
@@ -209,9 +209,9 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Dependencies:** Task 3, Task 4
 
 **Files likely touched:**
-- `src/bigpickle/application/interfaces.py` (añadir `@runtime_checkable` al Protocol)
-- `src/bigpickle/application/services/orchestrator.py` (+ `__init__.py`) — **aún no creado**
-- `src/bigpickle/infrastructure/tracing.py` — **aún no creado**
+- `src/paperextractor/application/interfaces.py` (añadir `@runtime_checkable` al Protocol)
+- `src/paperextractor/application/services/orchestrator.py` (+ `__init__.py`) — **aún no creado**
+- `src/paperextractor/infrastructure/tracing.py` — **aún no creado**
 - `tests/unit/test_orchestrator.py` — creado (RED)
 - `tests/fakes.py`, `tests/__init__.py` — refactor DRY
 
@@ -254,7 +254,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/integration/test_extract_flow.py` → **34 passed**; `tests/unit/test_multipart_ingress.py` → **25 passed**.
 - [ ] Manual check: `curl -F "file=@sample.pdf" localhost:8000/api/v1/extract` → envelope. **Pendiente por entorno**: no hay un Extractor levantado acá, así que el check manual no es ejecutable. La cobertura equivalente son los 33 tests de integración con el cliente real sobre `respx`. Se cierra en el Checkpoint C o con un Extractor stub.
-- [x] `uv run mypy bigpickle` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 43 files already formatted; `mypy -p bigpickle` → Success, no issues in 29 source files)*
+- [x] `uv run mypy paperextractor` y `uv run ruff check .` en limpio. *(`ruff check .` → All checks passed; `ruff format --check src tests` → 43 files already formatted; `mypy -p paperextractor` → Success, no issues in 29 source files)*
 - [x] Suite completa: `uv run pytest` → **203 passed** (144 de T1–T5 + 59 de T6).
 - [x] **El GREEN no tocó los tests**: `git diff --stat -- tests/` sale vacío. Los 59 tests del commit `1d1cbf1` pasaron sin modificación alguna, que es la prueba de que el RED describía el contrato y no la implementación.
 
@@ -267,7 +267,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 - **ISP** — `deps.py` expone `get_extractor_client`, `get_request_id` y `get_extraction_service`; los tests sobrescriben solo la dependencia que necesitan, así que una dependencia que crezca de más se notaría en el diff de los overrides.
 - **DIP** — El router depende de `ExtractionService`, no de `HttpExtractorClient`. Prueba ejecutable: `test_the_uploaded_body_reaches_the_service_byte_identical` corre **sin `respx`** porque la dependencia está sustituida. Y `get_extraction_service` devuelve el Protocol, mientras el `ExtractorClient` concreto solo se resuelve en un lugar: el lifespan.
 
-**Auditoría de capas ejecutada sobre lo nuevo:** el router no importa nada de `infrastructure.http.downstream`; solo `bigpickle.application.*`, `bigpickle.infrastructure.http.multipart` (el adaptador que T6 le asignó) y los schemas de presentación. `multipart.py` importa **solo stdlib** (`re`, `collections.abc`, `urllib.parse`), lo que `test_multipart_ingress_never_imports_the_web_server_or_the_transport` verifica por AST en cada corrida. Y `presentation/api/` no aparece en el grafo de imports de `application/`: la DIP no se invirtió en ninguna dirección.
+**Auditoría de capas ejecutada sobre lo nuevo:** el router no importa nada de `infrastructure.http.downstream`; solo `paperextractor.application.*`, `paperextractor.infrastructure.http.multipart` (el adaptador que T6 le asignó) y los schemas de presentación. `multipart.py` importa **solo stdlib** (`re`, `collections.abc`, `urllib.parse`), lo que `test_multipart_ingress_never_imports_the_web_server_or_the_transport` verifica por AST en cada corrida. Y `presentation/api/` no aparece en el grafo de imports de `application/`: la DIP no se invirtió en ninguna dirección.
 
 **Validación de la calidad de los tests: mutation testing.** Un GREEN que pasa no demuestra que los tests sirvan, y un RED que solo falla tampoco. Se escribieron **17 mutantes** —implementaciones plausibles pero incorrectas— sobre el GREEN final y se comprobó que los 59 tests los matan a todos. Los conteos son por suite, así que además muestran **dónde** está anclado cada contrato:
 
@@ -314,11 +314,11 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Dependencies:** Task 2, Task 5
 
 **Files touched:**
-- `src/bigpickle/infrastructure/http/multipart.py` — **creado** (`METADATA_WINDOW`, `RequestByteSource`, `sniff_multipart_filename`)
-- `src/bigpickle/presentation/api/__init__.py`, `presentation/api/v1/__init__.py` — **creados**
-- `src/bigpickle/presentation/api/deps.py` — **creado** (`get_extractor_client`, `get_request_id`, `get_extraction_service`, `EXTRACTOR_CLIENT`)
-- `src/bigpickle/presentation/api/v1/extract.py` — **creado** (router, validación de transporte, preanálisis, logging, envelope)
-- `src/bigpickle/main.py` — **modificado** (`create_app(settings | None = None)` + lifespan con un `HttpExtractorClient`)
+- `src/paperextractor/infrastructure/http/multipart.py` — **creado** (`METADATA_WINDOW`, `RequestByteSource`, `sniff_multipart_filename`)
+- `src/paperextractor/presentation/api/__init__.py`, `presentation/api/v1/__init__.py` — **creados**
+- `src/paperextractor/presentation/api/deps.py` — **creado** (`get_extractor_client`, `get_request_id`, `get_extraction_service`, `EXTRACTOR_CLIENT`)
+- `src/paperextractor/presentation/api/v1/extract.py` — **creado** (router, validación de transporte, preanálisis, logging, envelope)
+- `src/paperextractor/main.py` — **modificado** (`create_app(settings | None = None)` + lifespan con un `HttpExtractorClient`)
 - `docs/tasks/todo.md` — esta entrada
 
 **Estimated scope:** Medium (4-5 archivos de producción, 5 de test). *Realizado: 5 archivos de producción nuevos + `main.py` + doc; 324 líneas en total.*
@@ -336,13 +336,13 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest tests/integration/test_health.py`.
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [ ] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
 
 **Dependencies:** Task 4
 
 **Files likely touched:**
-- `src/bigpickle/presentation/api/v1/health.py`, `src/bigpickle/presentation/api/deps.py`
-- `src/bigpickle/main.py`
+- `src/paperextractor/presentation/api/v1/health.py`, `src/paperextractor/presentation/api/deps.py`
+- `src/paperextractor/main.py`
 - `tests/integration/test_health.py`
 
 **Estimated scope:** Small (3 archivos).
@@ -369,7 +369,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Verification:**
 - [ ] Tests pass: `uv run pytest` completo (sin `-m contract` por defecto).
 - [ ] Manual check: ci.yml validado (runde localmente con `act` si disponible, o push de prueba).
-- [ ] `uv run mypy bigpickle` y `uv run ruff check .` en limpio.
+- [ ] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
 
 **Dependencies:** Task 6, Task 7
 
@@ -384,7 +384,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 
 ### Task 9: README, `.env.example` y limpieza final
 
-**Description:** Reescribir `README.md` como guía de BigPickle (qué es, cómo correr, contrato, curl de ejemplo, tabla de errores RFC 9457), finalizar `.env.example`, aplicar `ruff format`, y verificación final de mypy estricto y del checklist de éxito del SPEC §12.
+**Description:** Reescribir `README.md` como guía de PaperExtractor (qué es, cómo correr, contrato, curl de ejemplo, tabla de errores RFC 9457), finalizar `.env.example`, aplicar `ruff format`, y verificación final de mypy estricto y del checklist de éxito del SPEC §12.
 
 **Acceptance criteria:**
 - [ ] README documenta comandos, contrato público, flujo de streaming y despliegue (proxy: `proxy_request_buffering off`).
@@ -394,7 +394,7 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest` (verde completo, incl. `-m contract` si hay Extractor real).
-- [ ] `uv run ruff check .` + `uv run ruff format --check .` + `uv run mypy bigpickle` en limpio.
+- [ ] `uv run ruff check .` + `uv run ruff format --check .` + `uv run mypy paperextractor` en limpio.
 - [ ] Manual check: flujo curl completo desde README funciona.
 
 **Dependencies:** Task 8

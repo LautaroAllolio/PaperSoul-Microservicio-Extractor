@@ -6,8 +6,8 @@ be exercised with a fake client and never learns about httpx.
 
 from abc import ABC, abstractmethod
 
-from bigpickle.application.interfaces import AsyncByteSource
-from bigpickle.infrastructure.http.downstream.models import ExtractorSuccess
+from paperextractor.application.interfaces import AsyncByteSource
+from paperextractor.infrastructure.http.downstream.models import ExtractorSuccess
 
 
 class ExtractorClient(ABC):
@@ -24,7 +24,7 @@ class ExtractorClient(ABC):
     ) -> ExtractorSuccess:
         """Relay ``source`` verbatim to the Extractor and return its success payload.
 
-        Raises a ``BigPickleError`` subclass for every downstream failure.
+        Raises a ``PaperExtractorError`` subclass for every downstream failure.
         """
         ...
 

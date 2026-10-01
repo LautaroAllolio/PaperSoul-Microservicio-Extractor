@@ -1,4 +1,4 @@
-"""FastAPI application factory for BigPickle.
+"""FastAPI application factory for PaperExtractor.
 
 The lifespan owns the one resource that must not be per-request: the pooled
 Extractor HTTP client (D7). It is built once when the application starts and
@@ -11,16 +11,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from bigpickle import __version__
-from bigpickle.infrastructure.config.settings import Settings, get_settings
-from bigpickle.infrastructure.http.downstream.http_client import HttpExtractorClient
-from bigpickle.presentation.api.deps import EXTRACTOR_CLIENT
-from bigpickle.presentation.api.v1.extract import router as extract_router
-from bigpickle.presentation.errors.handlers import register_error_handlers
+from paperextractor import __version__
+from paperextractor.infrastructure.config.settings import Settings, get_settings
+from paperextractor.infrastructure.http.downstream.http_client import HttpExtractorClient
+from paperextractor.presentation.api.deps import EXTRACTOR_CLIENT
+from paperextractor.presentation.api.v1.extract import router as extract_router
+from paperextractor.presentation.errors.handlers import register_error_handlers
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the BigPickle application.
+    """Build the PaperExtractor application.
 
     ``settings`` is accepted so a caller (a test, an embedding app) can hand
     over a resolved configuration; omitted, it comes from the environment.
@@ -36,7 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await client.aclose()
 
-    app = FastAPI(title="BigPickle", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="PaperExtractor", version=__version__, lifespan=lifespan)
 
     @app.get("/")
     async def root() -> dict[str, str]:
