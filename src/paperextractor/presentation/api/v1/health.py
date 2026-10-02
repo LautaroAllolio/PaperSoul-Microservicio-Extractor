@@ -1,8 +1,7 @@
 """``GET /health`` and ``GET /ready`` endpoints (SPEC §6.2, §6.3)."""
 
-from typing import Annotated, Union
-
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
@@ -36,7 +35,7 @@ async def health() -> HealthResponse:
 )
 async def ready(
     client: Annotated[ExtractorClient, Depends(get_extractor_client)],
-) -> Union[ReadinessResponse, JSONResponse]:
+) -> ReadinessResponse | JSONResponse:
     """Readiness check that probes the downstream Extractor."""
     try:
         await client.ping()

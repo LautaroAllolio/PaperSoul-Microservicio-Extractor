@@ -1,26 +1,5 @@
-"""Shared fixtures for PaperExtractor tests.
-
-Imports are lazy (inside fixtures) so that in the RED phase the suite
-fails on the missing ``paperextractor`` package, not on harness dependencies.
-"""
-
 import pytest
 
 
-@pytest.fixture
-def app():
-    from fastapi import FastAPI
-
-    from paperextractor.main import create_app
-
-    app: FastAPI = create_app()
-    return app
-
-
-@pytest.fixture
-async def client(app):
-    from httpx import ASGITransport, AsyncClient
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "contract: tests that require a real downstream Extractor")
