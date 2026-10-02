@@ -16,6 +16,7 @@ from paperextractor.infrastructure.config.settings import Settings, get_settings
 from paperextractor.infrastructure.http.downstream.http_client import HttpExtractorClient
 from paperextractor.presentation.api.deps import EXTRACTOR_CLIENT
 from paperextractor.presentation.api.v1.extract import router as extract_router
+from paperextractor.presentation.api.v1.health import router as health_router
 from paperextractor.presentation.errors.handlers import register_error_handlers
 
 
@@ -43,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(extract_router)
+    app.include_router(health_router)
     register_error_handlers(app)
     return app
 
