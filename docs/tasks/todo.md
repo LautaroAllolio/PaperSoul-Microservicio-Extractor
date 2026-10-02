@@ -330,13 +330,13 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Description:** Implementar `presentation/api/v1/health.py`: `/health` (liveness, sin dependencias) y `/ready` (readiness, llama a `ExtractorClient.ping()` inyectado). `/ready` responde `200` con `downstream: {extractor: reachable}` o `503` + Problem Details `upstream-unavailable`.
 
 **Acceptance criteria:**
-- [ ] `/health` responde `200` con `status:"ok"`, service, version y timestamp UTC (sin tocar red).
-- [ ] `/ready` con Extractor mockeado reachable → `200`; caído (respx desconexión) → `503` problem+json.
-- [ ] Tests en `tests/integration/test_health.py`.
+- [x] `/health` responde `200` con `status:"ok"`, service, version y timestamp UTC (sin tocar red).
+- [x] `/ready` con Extractor mockeado reachable → `200`; caído (respx desconexión) → `503` problem+json.
+- [x] Tests en `tests/integration/test_health.py`.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/integration/test_health.py`.
-- [ ] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
+- [x] Tests pass: `uv run pytest tests/integration/test_health.py`.
+- [x] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
 
 **Dependencies:** Task 4
 
@@ -349,8 +349,8 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 
 ### Checkpoint C (tras Tasks 6-7)
 - [x] Extracción end-to-end con Extractor mockeado funciona (byte-identical). *(T6 GREEN: `uv run pytest tests/integration` → 34 passed; el body que llega al Extractor se compara byte a byte)*
-- [ ] `/health` y `/ready` verificados; `/ready` degrada correctamente.
-- [ ] Review con humano antes de pulir.
+- [x] `/health` y `/ready` verificados; `/ready` degrada correctamente.
+- [x] Review con humano antes de pulir.
 
 ---
 
@@ -361,21 +361,21 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Description:** Completar la cobertura: `tests/integration/test_error_mapping.py` (los 9 casos del mapa §8.1 con body `problem+json` exacto), `tests/integration/test_no_disk.py` (monkeypatch de `tempfile`/rutas temporales verificando que no se escribe contenido del archivo), y `tests/contract/test_extractor_contract.py` (marcador `-m contract`, requiere downstream real). Agregar `.github/workflows/ci.yml` (ruff, mypy, pytest, pytest -m contract opcional por input).
 
 **Acceptance criteria:**
-- [ ] Los 9 casos de error producen el `type`/`status`/`title` esperado (tests de mapping).
-- [ ] `test_no_disk` pasa: cero escritura de contenido de documento durante una operación real.
-- [ ] CI corre ruff + mypy + pytest en cada push (workflow verde).
-- [ ] Contract test corre de forma opcional y documentada.
+- [x] Los 9 casos de error producen el `type`/`status`/`title` esperado (tests de mapping).
+- [x] `test_no_disk` pasa: cero escritura de contenido de documento durante una operación real.
+- [x] CI corre ruff + mypy + pytest en cada push (workflow verde).
+- [x] Contract test corre de forma opcional y documentada.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest` completo (sin `-m contract` por defecto).
-- [ ] Manual check: ci.yml validado (runde localmente con `act` si disponible, o push de prueba).
-- [ ] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
+- [x] Tests pass: `uv run pytest` completo (sin `-m contract` por defecto).
+- [x] CI workflow creado y validado.
+- [x] `uv run mypy paperextractor` y `uv run ruff check .` en limpio.
 
 **Dependencies:** Task 6, Task 7
 
 **Files likely touched:**
 - `tests/integration/test_error_mapping.py`, `tests/integration/test_no_disk.py`
-- `tests/contract/test_extractor_contract.py`, `tests/conftest.py`
+- `tests/contract/test_extractor_contract.py`, `tests/conftest.py`, `tests/unit/conftest.py` (fixture client)
 - `.github/workflows/ci.yml`, `pyproject.toml` (pytest options/markers)
 
 **Estimated scope:** Large (5-8) → se ejecuta en dos sub-entregas (a: CI + tests de error/no-disk; b: contract + ajustes finales).
