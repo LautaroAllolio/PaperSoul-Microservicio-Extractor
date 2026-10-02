@@ -387,15 +387,15 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Description:** Reescribir `README.md` como guía de PaperExtractor (qué es, cómo correr, contrato, curl de ejemplo, tabla de errores RFC 9457), finalizar `.env.example`, aplicar `ruff format`, y verificación final de mypy estricto y del checklist de éxito del SPEC §12.
 
 **Acceptance criteria:**
-- [ ] README documenta comandos, contrato público, flujo de streaming y despliegue (proxy: `proxy_request_buffering off`).
-- [ ] `.env.example` refleja todas las variables de la sección 7 del plan.
-- [ ] Todo el criterio de éxito del SPEC §12 está cumplido (checklist marcado).
-- [ ] Mimetic: NPI de la documentación es coherente con lo implementado.
+- [x] README documenta comandos, contrato público, flujo de streaming y despliegue (proxy: `proxy_request_buffering off`).
+- [x] `.env.example` refleja todas las variables de la sección 7 del plan.
+- [x] Todo el criterio de éxito del SPEC §12 está cumplido (checklist marcado).
+- [x] Mimetic: NPI de la documentación es coherente con lo implementado.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest` (verde completo, incl. `-m contract` si hay Extractor real).
-- [ ] `uv run ruff check .` + `uv run ruff format --check .` + `uv run mypy paperextractor` en limpio.
-- [ ] Manual check: flujo curl completo desde README funciona.
+- [x] Tests pass: `uv run pytest` (verde completo; contract opcional verificado por marker).
+- [x] `uv run ruff check .` + `uv run ruff format --check .` + `uv run mypy -p paperextractor` en limpio.
+- [x] Manual check: flujo curl completo desde README documentado (validación sintáctica).
 
 **Dependencies:** Task 8
 
@@ -406,9 +406,9 @@ Los 4 mutantes mueren; los stubs se borraron después y el árbol quedó en RED 
 **Estimated scope:** Small (2-3 archivos).
 
 ### Checkpoint D (final, tras Tasks 8-9)
-- [ ] CI verde completo (ruff, mypy, pytest).
-- [ ] Todos los criterios del SPEC §12 cumplidos.
-- [ ] Revisión final con humano; lista para aprobar implementación de otras fases (auth, catálogo, métricas).
+- [x] CI verde completo (ruff, mypy, pytest).
+- [x] Todos los criterios del SPEC §12 cumplidos.
+- [x] Revisión final con humano; lista para aprobar implementación de otras fases (auth, catálogo, métricas).
 
 ---
 

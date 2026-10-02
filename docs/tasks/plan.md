@@ -154,16 +154,20 @@ PaperSoul-Microservicio-Extractor/          # repo que aloja a PaperExtractor (v
 ```python
 from typing import Protocol, TypedDict
 
+
 class AsyncByteSource(Protocol):
     """Fuente de bytes consumible en chunks (abstrae request.stream(), BytesIO, tests)."""
+
     async def read(self, size: int = -1) -> bytes: ...
     async def close(self) -> None: ...
+
 
 class ExtractionResult(TypedDict):
     extracted_text: str
     page_count: int
     extraction_method: str
     duration_ms: int
+
 
 class ExtractionService(Protocol):
     async def extract(

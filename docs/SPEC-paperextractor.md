@@ -179,11 +179,13 @@ Comprueba alcanzabilidad del Extractor (probe HTTP corto sobre `{EXTRACTOR_BASE_
 # presentation/schemas/problems.py — RFC 9457
 from pydantic import BaseModel, ConfigDict
 
+
 class ProblemDetailError(BaseModel):
     model_config = ConfigDict(frozen=True)
     loc: list[str]
     msg: str
     type: str
+
 
 class ProblemDetails(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -200,16 +202,19 @@ class ProblemDetails(BaseModel):
 from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
+
 class ExtractedDocument(BaseModel):
     model_config = ConfigDict(frozen=True)
     extracted_text: str
     page_count: int
     extraction_method: str
 
+
 class OrchestrationMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
     downstream_service: Literal["extractor"] = "extractor"
     duration_ms: int
+
 
 class DocumentExtractResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -224,11 +229,13 @@ from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel
 
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: str
     version: str
     timestamp: datetime
+
 
 class ReadinessResponse(BaseModel):
     status: Literal["ready"]
