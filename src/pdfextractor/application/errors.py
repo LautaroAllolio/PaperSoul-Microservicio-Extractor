@@ -60,6 +60,13 @@ class NoTextError(PdfExtractorError):
     message = "sin texto extraíble"
 
 
+class ExtractionTimeoutError(PdfExtractorError):
+    """A single extraction exceeded ``PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS``."""
+
+    status = 504
+    message = "timeout"
+
+
 class UnreadableError(PdfExtractorError):
     """The document cannot be parsed as a readable PDF (corrupt, not a PDF, 0 pages)."""
 

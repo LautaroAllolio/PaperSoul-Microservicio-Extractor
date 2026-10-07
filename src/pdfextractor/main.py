@@ -16,6 +16,10 @@ from pdfextractor.application.services.extraction_service import ExtractionServi
 from pdfextractor.infrastructure.config.settings import Settings, get_settings
 from pdfextractor.infrastructure.extraction.pymupdf_extractor import PyMuPDFExtractor
 from pdfextractor.infrastructure.memory.pool import BufferPool
+from pdfextractor.infrastructure.middleware.middlewares import (
+    RequestIdMiddleware,
+    SizeBackstopMiddleware,
+)
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
 from pdfextractor.presentation.api.v1 import extract as extract_api
 from pdfextractor.presentation.api.v1 import health as health_api
@@ -49,6 +53,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pass
 
     app = FastAPI(title="pdfextractor", version=__version__, lifespan=lifespan)
+    app.add_middleware(SizeBackstopMiddleware, max_upload_bytes=resolved.max_upload_bytes)
+    app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(health_api.router)
     app.include_router(extract_api.router)

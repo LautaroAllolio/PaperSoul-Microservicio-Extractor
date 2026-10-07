@@ -209,14 +209,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/middleware/middlewares.py`: (a) `X-Request-Id` inbound→log→outbound; (b) backstop de tamaño de request (por si el pool no cortó); (c) timeout por job (`wait_for` + terminación del worker); (d) handler global de `PdfExtractorError` y de excepciones no controladas → `{"error": ...}` con status correcto; (e) shutdown del lifespan que drena y cierra el process pool sin leaks.
 
 **Acceptance criteria:**
-- [ ] `X-Request-Id` presente → se loguea y se devuelve en el header; ausente → se genera.
-- [ ] Un job que excede `EXTRACTION_TIMEOUT_SECONDS` termina con el status/timeout configurado.
-- [ ] Cualquier excepción no mapeada → `500 {"error": "internal"}` (canario: el mensaje interno no llega).
-- [ ] Shutdown no deja workers colgados ni warnings de loop.
+- [x] `X-Request-Id` presente → se loguea y se devuelve en el header; ausente → se genera.
+- [x] Un job que excede `EXTRACTION_TIMEOUT_SECONDS` termina con el status/timeout configurado.
+- [x] Cualquier excepción no mapeada → `500 {"error": "internal"}` (canario: el mensaje interno no llega).
+- [ ] Shutdown no deja workers colgados ni warnings de loop. *(depende del process pool, Task 9)*
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/integration/test_middlewares.py`.
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/integration/test_middlewares.py`.
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 6
 

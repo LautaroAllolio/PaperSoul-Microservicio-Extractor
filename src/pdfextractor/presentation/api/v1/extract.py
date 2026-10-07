@@ -7,10 +7,12 @@ buffer is handed to the application service, and the buffer goes straight back
 to the pool. Domain failures travel up untouched to the global handlers.
 """
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
+from pdfextractor.application.errors import ExtractionTimeoutError
 from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.http.multipart_reader import (
     boundary_from_content_type,
@@ -41,7 +43,13 @@ async def extract_document(
             max_bytes=settings.max_upload_bytes,
             sink=sink,
         )
-        result = service.extract(bytes(buffer))
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(service.extract, bytes(buffer)),
+                timeout=settings.extraction_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise ExtractionTimeoutError() from exc
     finally:
         if sink is not None:
             pool.release(sink)
