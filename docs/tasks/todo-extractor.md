@@ -176,14 +176,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Fixture de pytest que levanta `pdfextractor` con `uvicorn.Server` en un puerto efímero (thread de fondo) y lo conduce con el `HttpExtractorClient` + `ExtractionOrchestrator` **reales** de `src/paperextractor` (sin mocks en el camino crítico). Verificar: `200` con `ExtractorSuccess`, relay byte-identical, y el mapeo completo (`4xx`→422 `extraction-failed`, `5xx`→502 `upstream-error`, refused→502, timeout→504). No se edita código ni tests del orquestador.
 
 **Acceptance criteria:**
-- [ ] El `HttpExtractorClient.forward()` real devuelve `ExtractorSuccess` válido contra `pdfextractor`.
-- [ ] Los bytes recibidos por el extractor son byte-identical a los enviados.
-- [ ] Cada fallo downstream mapeado produce el RFC 9457 correcto del orquestador.
-- [ ] Cero modificaciones en `src/paperextractor/` y `tests/` del orquestador.
+- [x] El `HttpExtractorClient.forward()` real devuelve `ExtractorSuccess` válido contra `pdfextractor`.
+- [x] Los bytes recibidos por el extractor son byte-identical a los enviados.
+- [x] Cada fallo downstream mapeado produce el RFC 9457 correcto del orquestador.
+- [x] Cero modificaciones en `src/paperextractor/` y `tests/` del orquestador.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/contract/test_orchestrator_contract.py`.
-- [ ] Suite completa del orquestador sigue verde (`uv run pytest tests/unit tests/integration`).
+- [x] Tests pass: `uv run pytest tests/extractor/contract/test_orchestrator_contract.py`.
+- [x] Suite completa del orquestador sigue verde (`uv run pytest tests/unit tests/integration`).
 
 **Dependencies:** Task 6
 
@@ -196,8 +196,8 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 ---
 
 ### Checkpoint B (tras Tasks 6-7)
-- [ ] El cliente real del orquestador habla con `pdfextractor` end-to-end.
-- [ ] Contrato § 4 satisfecho byte a byte.
+- [x] El cliente real del orquestador habla con `pdfextractor` end-to-end.
+- [x] Contrato § 4 satisfecho byte a byte.
 - [ ] Revisión humana antes del trabajo de resiliencia.
 
 ---
