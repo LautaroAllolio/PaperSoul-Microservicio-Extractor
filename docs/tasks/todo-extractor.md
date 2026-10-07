@@ -89,14 +89,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/extraction/pymupdf_extractor.py` que implementa el puerto `TextExtractor` (Protocol): abre el PDF desde `io.BytesIO(buf)` (sin disco), une el texto de todas las páginas en memoria, devuelve `(text, page_count)` y siempre cierra el documento. Detectar PDF cifrado, corrupto y con 0 páginas y traducirlos a las excepciones de dominio correctas (`EncryptionError`, `UnreadableError`). Cerrar la jerarquía de `PdfExtractorError` en `application/errors.py` con `status` + mensaje acotado.
 
 **Acceptance criteria:**
-- [ ] PDF válido devuelve texto exacto + `page_count` correcto.
-- [ ] PDF cifrado → `EncryptionError` (status 422); corrupto/no-PDF → `UnreadableError`; 0 páginas → `UnreadableError`.
-- [ ] No se escapan handles de archivo abiertos (sin `ResourceWarning`).
-- [ ] Si un sample real devuelve texto, `MIN_TEXT_LENGTH` decide texto vs "sin texto" como retorno, no como excepción en esta capa.
+- [x] PDF válido devuelve texto exacto + `page_count` correcto.
+- [x] PDF cifrado → `EncryptionError` (status 422); corrupto/no-PDF → `UnreadableError`; 0 páginas → `UnreadableError`.
+- [x] No se escapan handles de archivo abiertos (sin `ResourceWarning`).
+- [x] Si un sample real devuelve texto, `MIN_TEXT_LENGTH` decide texto vs "sin texto" como retorno, no como excepción en esta capa.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/test_pymupdf_extractor.py` (fixtures PDF: válido, cifrado, corrupto, vacío).
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/test_pymupdf_extractor.py` (fixtures PDF: válido, cifrado, corrupto, vacío).
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 1
 

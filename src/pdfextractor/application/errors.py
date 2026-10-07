@@ -44,3 +44,17 @@ class MalformedMultipartError(PdfExtractorError):
 
     status = 422
     message = "multipart inválido"
+
+
+class EncryptionError(PdfExtractorError):
+    """The PDF is password-protected and cannot be read without it."""
+
+    status = 422
+    message = "no se pudo leer: cifrado"
+
+
+class UnreadableError(PdfExtractorError):
+    """The document cannot be parsed as a readable PDF (corrupt, not a PDF, 0 pages)."""
+
+    status = 422
+    message = "no se pudo leer"
