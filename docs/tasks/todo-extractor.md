@@ -115,14 +115,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `application/services/extraction_service.py`: secuencia read → validate → extract (PyMuPDF) → normalizar (NFC, colapsar `\n{3,}`) → `ExtractionResult {extracted_text, extraction_method, page_count}`. Recibe el buffer ya extraído o la fuente; depende SOLO de puertos (`TextExtractor`); no importa FastAPI/httpx (test por AST). Propaga errores de dominio sin transformarlos.
 
 **Acceptance criteria:**
-- [ ] Con un `TextExtractor` fake produce `ExtractionResult` completo y correcto.
-- [ ] Propaga excepciones de dominio intactas.
-- [ ] Normaliza el texto (NFC y colapso de líneas en blanco).
-- [ ] Test de capas por AST: `application/` no importa infraestructura concreta ni HTTP.
+- [x] Con un `TextExtractor` fake produce `ExtractionResult` completo y correcto.
+- [x] Propaga excepciones de dominio intactas.
+- [x] Normaliza el texto (NFC y colapso de líneas en blanco).
+- [x] Test de capas por AST: `application/` no importa infraestructura concreta ni HTTP.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/test_extraction_service.py`.
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/test_extraction_service.py`.
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Tasks 2, 4
 
@@ -136,9 +136,9 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 ---
 
 ### Checkpoint A (tras Tasks 2-5)
-- [ ] `uv run pytest tests/extractor` verde.
-- [ ] Zero-disk verificado en el reader; buffers reusados; pool acotado.
-- [ ] Capas verificadas por AST (application no ve HTTP).
+- [x] `uv run pytest tests/extractor` verde.
+- [x] Zero-disk verificado en el reader; buffers reusados; pool acotado.
+- [x] Capas verificadas por AST (application no ve HTTP).
 - [ ] Review con humano del diseño de parsing antes de exponer endpoints.
 
 ---

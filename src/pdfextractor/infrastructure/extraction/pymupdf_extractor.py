@@ -19,6 +19,8 @@ from pdfextractor.application.interfaces import TextExtractor
 class PyMuPDFExtractor:
     """Extracts text from PDF bytes without ever writing to disk."""
 
+    method = "pymupdf"
+
     def extract(self, data: bytes) -> tuple[str, int]:
         """Return ``(text, page_count)`` for one PDF document.
 

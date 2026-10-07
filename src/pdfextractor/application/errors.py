@@ -53,6 +53,13 @@ class EncryptionError(PdfExtractorError):
     message = "no se pudo leer: cifrado"
 
 
+class NoTextError(PdfExtractorError):
+    """The parsed document yields less than ``PDFEXTRACTOR_MIN_TEXT_LENGTH`` characters."""
+
+    status = 422
+    message = "sin texto extraíble"
+
+
 class UnreadableError(PdfExtractorError):
     """The document cannot be parsed as a readable PDF (corrupt, not a PDF, 0 pages)."""
 
