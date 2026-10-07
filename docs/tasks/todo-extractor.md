@@ -11,17 +11,17 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Crear `src/pdfextractor/` con capas `presentation/`, `application/`, `infrastructure/` y un `main.py` con app factory + lifespan mínimo. Implementar `infrastructure/config/settings.py` (pydantic-settings, prefijo `PDFEXTRACTOR_`, todas las variables de plan § 7). Agregar las dependencias `pymupdf` y `prometheus-client` al extra opcional `extractor` en `pyproject.toml` (**sin `python-multipart`**: el test de invariante del orquestador `test_the_extract_route_needs_no_multipart_parser_dependency` exige que no esté importable), registrar `src/pdfextractor` en hatch, y extender `.github/workflows/ci.yml` para instalar el extra, correr la suite del Extractor (`uv run pytest tests/extractor`) y `mypy -p pdfextractor`.
 
 **Acceptance criteria:**
-- [ ] `uv sync --extra extractor` instala sin errores; `pdfextractor` es importable.
-- [ ] `create_app()` levanta una app FastAPI con `GET /health` respondiendo `200`.
-- [ ] `Settings` carga defaults correctos y overrides de entorno (prefijo `PDFEXTRACTOR_`).
-- [ ] `uv run mypy -p pdfextractor` y `uv run ruff check .` pasan en limpio.
-- [ ] El orquestador sigue pasando su suite completa (203 tests) intacta.
+- [x] `uv sync --extra extractor` instala sin errores; `pdfextractor` es importable.
+- [x] `create_app()` levanta una app FastAPI con `GET /health` respondiendo `200`.
+- [x] `Settings` carga defaults correctos y overrides de entorno (prefijo `PDFEXTRACTOR_`).
+- [x] `uv run mypy -p pdfextractor` y `uv run ruff check .` pasan en limpio.
+- [x] El orquestador sigue pasando su suite completa (203 tests) intacta.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor` (test básico de arranque/settings).
-- [ ] Build succeeds: `uv run ruff format --check src tests`.
-- [ ] Type check: `uv run mypy -p pdfextractor`.
-- [ ] CI: el job incluye la suite del Extractor; no rompe el job del orquestador.
+- [x] Tests pass: `uv run pytest tests/extractor` (test básico de arranque/settings).
+- [x] Build succeeds: `uv run ruff format --check src tests`.
+- [x] Type check: `uv run mypy -p pdfextractor`.
+- [x] CI: el job incluye la suite del Extractor; no rompe el job del orquestador.
 
 **Dependencies:** None
 
@@ -42,14 +42,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/http/multipart_reader.py`: un parser de `multipart/form-data` alimentado por `request.stream()` (asíncrono, chunk a chunk) cuyo sink es un `bytearray` en memoria — nunca `UploadFile`, nunca `SpooledTemporaryFile`, nunca `tempfile` — y **solo stdlib** (`python-multipart` excluido por la invariante del orquestador). Debe aceptar bodies con `Content-Length` y chunked, manejar límites CRLF/LF, extraer solo el part `file` y abortar con `OversizedError` (413) al superar `PDFEXTRACTOR_MAX_UPLOAD_BYTES` durante la lectura.
 
 **Acceptance criteria:**
-- [ ] El part `file` extraído es byte-identical al enviado (varios tamaños, cruce de frontera de chunk).
-- [ ] Se aborta al exceder el tamaño durante el streaming (sin leer completo).
-- [ ] Multipart sin `file`, trunkado o con boundary inválido produce el error de dominio correcto.
-- [ ] Nunca se invoca `SpooledTemporaryFile`/`tempfile` (monkeypatch/rastreo de imports).
+- [x] El part `file` extraído es byte-identical al enviado (varios tamaños, cruce de frontera de chunk).
+- [x] Se aborta al exceder el tamaño durante el streaming (sin leer completo).
+- [x] Multipart sin `file`, trunkado o con boundary inválido produce el error de dominio correcto.
+- [x] Nunca se invoca `SpooledTemporaryFile`/`tempfile` (monkeypatch/rastreo de imports).
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/test_multipart_reader.py`.
-- [ ] `uv run ruff check .` y `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/test_multipart_reader.py`.
+- [x] `uv run ruff check .` y `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 1
 
