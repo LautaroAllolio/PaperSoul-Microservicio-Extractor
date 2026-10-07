@@ -150,14 +150,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `presentation/api/v1/extract.py` (router con `Request` directo, **sin** `UploadFile` — D2), `presentation/api/deps.py` (DI: `get_extraction_service`, `get_request_id`), montar el router en `main.py`, handlers globales que devuelven `{"error": ...}` con el status correcto, y `GET /health` (200 siempre) + `GET /ready` (200 / 503). Emite exactamente `{"extracted_text","extraction_method","page_count"}` en `200`.
 
 **Acceptance criteria:**
-- [ ] `POST` multipart real (campo `file`) → `200` con el body exacto del contrato (§ 4).
-- [ ] Cada fallo (cifrado, corrupto, sin texto, sin campo, demasiado grande, saturado) responde `{"error": str}` con el status correcto.
-- [ ] `/health` responde `200` sin tocar dependencias; `/ready` refleja el estado del pool.
-- [ ] El endpoint nunca dispara `MultiPartParser` de Starlette (no usa `File`/`Form`).
+- [x] `POST` multipart real (campo `file`) → `200` con el body exacto del contrato (§ 4).
+- [x] Cada fallo (cifrado, corrupto, sin texto, sin campo, demasiado grande, saturado) responde `{"error": str}` con el status correcto.
+- [x] `/health` responde `200` sin tocar dependencias; `/ready` refleja el estado del pool.
+- [x] El endpoint nunca dispara `MultiPartParser` de Starlette (no usa `File`/`Form`).
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/integration/test_extract_api.py`.
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/integration/test_extract_api.py`.
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 5
 

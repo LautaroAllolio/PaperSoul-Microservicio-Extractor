@@ -1,8 +1,9 @@
 """FastAPI application factory for pdfextractor (the downstream Extractor).
 
-The lifespan is intentionally minimal at this stage: it resolves the settings
-into the application state. The process pool and other bounded resources that
-must live for the whole process arrive in later tasks and are attached here.
+The lifespan owns every process-wide resource the contract needs: resolved
+settings, the bounded buffer pool that feeds the multipart reader, the
+application service behind the ``TextExtractor`` port, and the readiness flag
+that ``/ready`` reports and later tasks degrade under overload.
 """
 
 from collections.abc import AsyncIterator
@@ -11,7 +12,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from pdfextractor import __version__
+from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.config.settings import Settings, get_settings
+from pdfextractor.infrastructure.extraction.pymupdf_extractor import PyMuPDFExtractor
+from pdfextractor.infrastructure.memory.pool import BufferPool
+from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
+from pdfextractor.presentation.api.v1 import extract as extract_api
+from pdfextractor.presentation.api.v1 import health as health_api
+from pdfextractor.presentation.errors.handlers import register_exception_handlers
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,16 +33,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = resolved
+        app.state.pool = BufferPool(capacity=resolved.effective_max_concurrent_extractions)
+        setattr(
+            app.state,
+            EXTRACTION_SERVICE,
+            ExtractionService(
+                extractor=PyMuPDFExtractor(),
+                min_text_length=resolved.min_text_length,
+            ),
+        )
+        app.state.ready = True
         try:
             yield
         finally:
             pass
 
     app = FastAPI(title="pdfextractor", version=__version__, lifespan=lifespan)
-
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "pdfextractor", "version": __version__}
+    register_exception_handlers(app)
+    app.include_router(health_api.router)
+    app.include_router(extract_api.router)
 
     return app
 
