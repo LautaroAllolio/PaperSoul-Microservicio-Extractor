@@ -67,12 +67,12 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/memory/pool.py`: un pool acotado de `bytearray` reusados entre requests con `memoryview` para slicing, reset de longitud en cada préstamo (sin sangrado de datos entre requests) y tamaño máximo = concurrencia configurada. Uso: sink del `multipart_reader`.
 
 **Acceptance criteria:**
-- [ ] Los buffers se reusan (test de identidad del objeto) dentro del tope del pool.
-- [ ] No hay sangrado de contenido entre préstamos consecutivos.
-- [ ] El pool nunca excede su capacidad y devuelve `None`/genera nuevo solo dentro del tope.
+- [x] Los buffers se reusan (test de identidad del objeto) dentro del tope del pool.
+- [x] No hay sangrado de contenido entre préstamos consecutivos.
+- [x] El pool nunca excede su capacidad y devuelve `None`/genera nuevo solo dentro del tope.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/test_buffer_pool.py`.
+- [x] Tests pass: `uv run pytest tests/extractor/test_buffer_pool.py`.
 
 **Dependencies:** Task 1 (paralelo a Task 2)
 
