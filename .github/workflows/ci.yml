@@ -30,7 +30,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra extractor
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -39,7 +39,7 @@ jobs:
         run: uv run ruff format --check src tests
 
       - name: Type check (mypy)
-        run: uv run mypy -p paperextractor
+        run: uv run mypy -p paperextractor && uv run mypy -p pdfextractor
 
       - name: Test (unit + integration, no contract)
         run: uv run pytest -q
