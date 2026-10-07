@@ -67,6 +67,13 @@ class ExtractionTimeoutError(PdfExtractorError):
     message = "timeout"
 
 
+class OverloadError(PdfExtractorError):
+    """Every concurrency slot is busy and the queue timed out instead of accepting."""
+
+    status = 503
+    message = "overloaded"
+
+
 class UnreadableError(PdfExtractorError):
     """The document cannot be parsed as a readable PDF (corrupt, not a PDF, 0 pages)."""
 

@@ -38,6 +38,7 @@ from paperextractor.infrastructure.http.downstream.http_client import (
     EXTRACT_PATH,
     HttpExtractorClient,
 )
+from pdfextractor.infrastructure.config.settings import Settings as ExtractorSettings
 from pdfextractor.main import create_app
 
 BOUNDARY = "contract-boundary-42"
@@ -129,7 +130,7 @@ def _orchestrator_settings(base_url: str, *, read: float = 5.0) -> OrchestratorS
 @pytest.fixture
 async def extractor() -> _ExtractorHarness:
     captured: dict[str, bytes] = {}
-    served = _start_server(_capturing_app(create_app(), captured))
+    served = _start_server(_capturing_app(create_app(ExtractorSettings(workers=2)), captured))
     client = HttpExtractorClient(_orchestrator_settings(served.base_url))
     orchestrator = ExtractionOrchestrator(client=client, new_request_id=lambda: "contract-test-rid")
     try:

@@ -22,7 +22,12 @@ async def health() -> dict[str, str]:
 
 @router.get("/ready")
 async def ready(request: Request) -> JSONResponse:
-    is_ready = bool(getattr(request.app.state, "ready", True))
+    ready_state = getattr(request.app.state, "ready_state", None)
+    is_ready = (
+        ready_state.ready
+        if ready_state is not None
+        else bool(getattr(request.app.state, "ready", True))
+    )
     if is_ready:
         return JSONResponse(status_code=200, content={"status": "ready"})
     return JSONResponse(status_code=503, content={"status": "not ready"})

@@ -212,7 +212,7 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 - [x] `X-Request-Id` presente → se loguea y se devuelve en el header; ausente → se genera.
 - [x] Un job que excede `EXTRACTION_TIMEOUT_SECONDS` termina con el status/timeout configurado.
 - [x] Cualquier excepción no mapeada → `500 {"error": "internal"}` (canario: el mensaje interno no llega).
-- [ ] Shutdown no deja workers colgados ni warnings de loop. *(depende del process pool, Task 9)*
+- [x] Shutdown no deja workers colgados ni warnings de loop. *(pool real + `finally: extractor.close()`, Task 9)*
 
 **Verification:**
 - [x] Tests pass: `uv run pytest tests/extractor/integration/test_middlewares.py`.
@@ -235,14 +235,14 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/concurrency/pool.py`: `ProcessPoolExecutor(workers)` creado en lifespan, `asyncio.Semaphore(max_concurrent_extractions)`, `asyncio.wait_for(queue_timeout)`; saturación → `OverloadError` (503). Recuperación ante crash de worker (recrear/purgar futuras fallidas) y `ReadyState` que degrada `/ready` a 503 bajo sobrecarga. Exponer `extractor_inflight`, `extractor_queue_depth`, `extractor_worker_restarts_total`.
 
 **Acceptance criteria:**
-- [ ] Carga concurrente nunca supera `max_concurrent_extractions`.
-- [ ] Saturación responde `503` rápido (no acumula colas infinitas).
-- [ ] Un worker que muere se detecta; las futuras afectadas fallan con `{"error"}` controlado y el pool sigue sirviendo.
-- [ ] `/ready` pasa a 503 bajo sobrecarga y vuelve a 200 al recuperarse.
+- [x] Carga concurrente nunca supera `max_concurrent_extractions`.
+- [x] Saturación responde `503` rápido (no acumula colas infinitas).
+- [x] Un worker que muere se detecta; las futuras afectadas fallan con `{"error"}` controlado y el pool sigue sirviendo.
+- [x] `/ready` pasa a 503 bajo sobrecarga y vuelve a 200 al recuperarse.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/integration/test_concurrency.py`.
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/integration/test_concurrency.py`.
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 8
 

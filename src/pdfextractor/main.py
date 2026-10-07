@@ -13,8 +13,11 @@ from fastapi import FastAPI
 
 from pdfextractor import __version__
 from pdfextractor.application.services.extraction_service import ExtractionService
+from pdfextractor.infrastructure.concurrency.pool import (
+    ProcessPoolTextExtractor,
+    ReadyState,
+)
 from pdfextractor.infrastructure.config.settings import Settings, get_settings
-from pdfextractor.infrastructure.extraction.pymupdf_extractor import PyMuPDFExtractor
 from pdfextractor.infrastructure.memory.pool import BufferPool
 from pdfextractor.infrastructure.middleware.middlewares import (
     RequestIdMiddleware,
@@ -37,12 +40,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = resolved
+        app.state.ready_state = ReadyState()
+        extractor = ProcessPoolTextExtractor(
+            workers=resolved.effective_workers,
+            max_concurrent=resolved.effective_max_concurrent_extractions,
+            queue_timeout=resolved.queue_timeout_seconds,
+            extraction_timeout=resolved.extraction_timeout_seconds,
+            ready_state=app.state.ready_state,
+        )
         app.state.pool = BufferPool(capacity=resolved.effective_max_concurrent_extractions)
         setattr(
             app.state,
             EXTRACTION_SERVICE,
             ExtractionService(
-                extractor=PyMuPDFExtractor(),
+                extractor=extractor,
                 min_text_length=resolved.min_text_length,
             ),
         )
@@ -50,7 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
-            pass
+            extractor.close()
 
     app = FastAPI(title="pdfextractor", version=__version__, lifespan=lifespan)
     app.add_middleware(SizeBackstopMiddleware, max_upload_bytes=resolved.max_upload_bytes)

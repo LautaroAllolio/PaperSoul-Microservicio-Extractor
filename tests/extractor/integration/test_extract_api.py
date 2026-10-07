@@ -164,7 +164,7 @@ async def test_extract_rejects_a_document_without_any_text(client, blank_pdf: by
 
 
 async def test_extract_aborts_when_the_upload_exceeds_the_limit(valid_pdf: bytes) -> None:
-    app = create_app(Settings(max_upload_bytes=64))
+    app = create_app(Settings(workers=1, max_upload_bytes=64))
     body, content_type = multipart(valid_pdf)
     async for client in _app_client(app):
         response = await client.post(
@@ -176,7 +176,7 @@ async def test_extract_aborts_when_the_upload_exceeds_the_limit(valid_pdf: bytes
 
 
 async def test_extract_requires_a_boundary_in_the_content_type(valid_pdf: bytes) -> None:
-    app = create_app()
+    app = create_app(Settings(workers=1))
     body, _ = multipart(valid_pdf)
     async for client in _app_client(app):
         response = await client.post(
@@ -214,21 +214,21 @@ async def test_health_stays_200_without_touching_dependencies(client) -> None:
 
 
 async def test_ready_reports_the_readiness_state(client) -> None:
-    app = client.app  # type: ignore[attr-defined]
+    ready_state = client.app.state.ready_state  # type: ignore[attr-defined]
 
-    app.state.ready = True
+    ready_state.mark_ready()
     ready = await client.get("/ready")
     assert ready.status_code == 200
     assert ready.json() == {"status": "ready"}
 
-    app.state.ready = False
+    ready_state.mark_overloaded()
     busy = await client.get("/ready")
     assert busy.status_code == 503
     assert busy.json() == {"status": "not ready"}
 
 
 async def test_unmapped_exceptions_degrade_to_a_generic_internal_error() -> None:
-    app = create_app()
+    app = create_app(Settings(workers=1))
 
     @app.get("/boom")
     async def boom() -> None:
@@ -244,7 +244,7 @@ async def test_unmapped_exceptions_degrade_to_a_generic_internal_error() -> None
 
 
 async def test_the_request_id_dependency_echoes_the_header_or_generates_one() -> None:
-    app = create_app()
+    app = create_app(Settings(workers=1))
 
     @app.get("/_request_id")
     async def probe(request_id: str = Depends(get_request_id)) -> dict[str, str]:

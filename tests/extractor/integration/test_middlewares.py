@@ -57,7 +57,7 @@ async def test_an_absent_request_id_is_minted_and_echoed_outbound(client) -> Non
 
 
 async def test_declared_content_length_over_the_limit_is_rejected_before_processing() -> None:
-    app = create_app(Settings(max_upload_bytes=100))
+    app = create_app(Settings(workers=1, max_upload_bytes=100))
     body, content_type = multipart(b"tiny")
 
     async for client in _client_for(app):
@@ -78,7 +78,7 @@ class _SlowService:
 
 
 async def test_a_job_that_exceeds_the_timeout_answers_504_timeout() -> None:
-    app = create_app(Settings(extraction_timeout_seconds=0.2))
+    app = create_app(Settings(workers=1, extraction_timeout_seconds=0.2))
 
     async for client in _client_for(app):
         setattr(client.app.state, EXTRACTION_SERVICE, _SlowService())
@@ -98,7 +98,7 @@ def test_the_timeout_failure_is_a_domain_error_with_status_504() -> None:
 
 
 async def test_unmapped_exceptions_degrade_to_a_generic_500_outside_the_route() -> None:
-    app = create_app()
+    app = create_app(Settings(workers=1))
 
     @app.get("/boom")
     async def boom() -> None:
