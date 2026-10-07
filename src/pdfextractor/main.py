@@ -23,9 +23,12 @@ from pdfextractor.infrastructure.middleware.middlewares import (
     RequestIdMiddleware,
     SizeBackstopMiddleware,
 )
+from pdfextractor.infrastructure.telemetry.logging_ import configure_logging
+from pdfextractor.infrastructure.telemetry.metrics import create_metrics
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
 from pdfextractor.presentation.api.v1 import extract as extract_api
 from pdfextractor.presentation.api.v1 import health as health_api
+from pdfextractor.presentation.api.v1 import metrics as metrics_api
 from pdfextractor.presentation.errors.handlers import register_exception_handlers
 
 
@@ -36,6 +39,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     over a resolved configuration; omitted, it comes from the environment.
     """
     resolved = get_settings() if settings is None else settings
+    configure_logging(resolved.log_level)
+    bundle = create_metrics()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -48,7 +53,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extraction_timeout=resolved.extraction_timeout_seconds,
             ready_state=app.state.ready_state,
         )
+        app.state.extractor = extractor
         app.state.pool = BufferPool(capacity=resolved.effective_max_concurrent_extractions)
+        app.state.metrics = bundle
         setattr(
             app.state,
             EXTRACTION_SERVICE,
@@ -65,10 +72,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="pdfextractor", version=__version__, lifespan=lifespan)
     app.add_middleware(SizeBackstopMiddleware, max_upload_bytes=resolved.max_upload_bytes)
-    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(RequestIdMiddleware, metrics=bundle)
     register_exception_handlers(app)
     app.include_router(health_api.router)
     app.include_router(extract_api.router)
+    if resolved.metrics_enabled:
+        app.include_router(metrics_api.router, prefix="")
 
     return app
 

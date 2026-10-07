@@ -146,7 +146,10 @@ log "generating fixtures (max_upload_bytes=${LOAD_MAX_UPLOAD_BYTES})"
   --max-upload-bytes "${LOAD_MAX_UPLOAD_BYTES}")
 
 if [[ "${USE_EXTERNAL}" -eq 0 ]]; then
-  log "starting pdfextractor on port ${PDFEXTRACTOR_PORT}"
+  mkdir -p "${RESULTS_DIR}"
+  SERVER_LOG="${RESULTS_DIR}/server.log"
+  : > "${SERVER_LOG}"
+  log "starting pdfextractor on port ${PDFEXTRACTOR_PORT} (log: ${SERVER_LOG})"
   (
     cd "${REPO_ROOT}"
     PDFEXTRACTOR_PORT="${PDFEXTRACTOR_PORT}" \
@@ -156,7 +159,7 @@ if [[ "${USE_EXTERNAL}" -eq 0 ]]; then
       uv run uvicorn --factory pdfextractor.main:create_app \
         --host 127.0.0.1 --port "${PDFEXTRACTOR_PORT}" \
         --log-level warning
-  ) &
+  ) >"${SERVER_LOG}" 2>&1 &
   SERVER_PID=$!
   wait_for_health "${TARGET_BASE_URL}"
   log "service healthy at ${TARGET_BASE_URL}"

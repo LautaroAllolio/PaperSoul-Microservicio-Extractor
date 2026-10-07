@@ -8,6 +8,7 @@ to the pool. Domain failures travel up untouched to the global handlers.
 """
 
 import asyncio
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -43,6 +44,7 @@ async def extract_document(
             max_bytes=settings.max_upload_bytes,
             sink=sink,
         )
+        started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(service.extract, bytes(buffer)),
@@ -50,6 +52,14 @@ async def extract_document(
             )
         except TimeoutError as exc:
             raise ExtractionTimeoutError() from exc
+        duration = time.perf_counter() - started
+        request.scope.setdefault("state", {})["outcome"] = "ok"
+        request.scope.setdefault("state", {})["pages"] = result.page_count
+        request.app.state.metrics.observe_extraction(
+            duration_seconds=duration,
+            size=len(buffer),
+            page_count=result.page_count,
+        )
     finally:
         if sink is not None:
             pool.release(sink)

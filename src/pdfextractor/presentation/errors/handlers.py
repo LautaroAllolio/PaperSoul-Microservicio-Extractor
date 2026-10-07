@@ -18,10 +18,16 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(PdfExtractorError)
     async def domain_error(request: Request, exc: PdfExtractorError) -> JSONResponse:
-        del request
+        _mark_failure(request, exc)
         return JSONResponse(status_code=exc.status, content={"error": str(exc)})
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-        del request, exc
+        _mark_failure(request, exc)
         return JSONResponse(status_code=500, content={"error": "internal"})
+
+
+def _mark_failure(request: Request, exc: BaseException) -> None:
+    state = request.scope.setdefault("state", {})
+    state["outcome"] = "error"
+    state["error_type"] = type(exc).__name__

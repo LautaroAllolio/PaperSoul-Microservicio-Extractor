@@ -9,12 +9,15 @@ not the primary guard.
 """
 
 import logging
+import time
 import uuid
 from collections.abc import MutableMapping
 from typing import Any
 
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from pdfextractor.infrastructure.telemetry.metrics import Metrics
 
 __all__ = ["RequestIdMiddleware", "SizeBackstopMiddleware"]
 
@@ -23,37 +26,50 @@ _LOGGER = logging.getLogger("pdfextractor.http")
 
 
 class RequestIdMiddleware:
-    """Mint or inherit the correlation id, log it and echo it on every response.
+    """Mint or inherit the correlation id, log it, echo it and count the request.
 
     The id is parked on the request so the ``get_request_id`` dependency and
     the downstream call share one value. The log record carries only surfaced
-    fields — never document bytes or filenames.
+    fields — the uptime, the upload length and any outcome parked by the route
+    — never document bytes or filenames.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, metrics: Metrics | None = None) -> None:
         self._app = app
+        self._metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
 
+        started = time.perf_counter()
         request_id = _inbound_request_id(scope)
         if request_id is None:
             request_id = uuid.uuid4().hex
-        scope.setdefault("state", {})["request_id"] = request_id
+        state = scope.setdefault("state", {})
+        state["request_id"] = request_id
+        declared_bytes = _declared_content_length(scope)
 
         async def send_with_request_id(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
-                _LOGGER.info(
-                    "request",
-                    extra={
-                        "request_id": request_id,
-                        "method": scope["method"],
-                        "path": scope["path"],
-                        "status": message.get("status"),
-                    },
-                )
+                status = message["status"]
+                duration_ms = (time.perf_counter() - started) * 1000.0
+                if self._metrics is not None:
+                    self._metrics.observe_request(status=status, method=scope["method"])
+                fields: dict[str, Any] = {
+                    "request_id": request_id,
+                    "method": scope["method"],
+                    "path": scope["path"],
+                    "status": status,
+                    "duration_ms": round(duration_ms, 3),
+                }
+                if declared_bytes is not None:
+                    fields["bytes"] = declared_bytes
+                for key in ("outcome", "error_type", "pages"):
+                    if key in state:
+                        fields[key] = state[key]
+                _LOGGER.info("request", extra=fields)
                 headers = [header for header in message["headers"] if header[0] != _REQUEST_ID]
                 headers.append((_REQUEST_ID, request_id.encode("latin-1")))
                 message["headers"] = headers

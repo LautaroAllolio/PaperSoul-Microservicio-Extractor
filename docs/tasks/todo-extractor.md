@@ -261,13 +261,13 @@ Task list operativo de la implementación del **Extractor** de documentos. Detal
 **Description:** Implementar `infrastructure/telemetry/logging_.py` (formatter JSON de stdlib con contexto enlazado: `request_id`, `duration_ms`, `bytes`, `pages`, `method`, `outcome`, `error_type`) y `metrics.py` (registro de todas las métricas de plan § 6). Montar `/metrics` (ASGI) cuando `PDFEXTRACTOR_METRICS_ENABLED`. Cardinalidad de labels baja.
 
 **Acceptance criteria:**
-- [ ] Los logs de request son single-line JSON con `request_id` y campos del contrato.
-- [ ] Test canario: el contenido del documento jamás aparece en logs (filename solo como longitud).
-- [ ] Tras una request, `/metrics` expone los valores esperados de cada métrica definida.
+- [x] Los logs de request son single-line JSON con `request_id` y campos del contrato.
+- [x] Test canario: el contenido del documento jamás aparece en logs (filename solo como longitud).
+- [x] Tras una request, `/metrics` expone los valores esperados de cada métrica definida.
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest tests/extractor/integration/test_telemetry.py`.
-- [ ] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
+- [x] Tests pass: `uv run pytest tests/extractor/integration/test_telemetry.py`.
+- [x] `uv run ruff check .` / `uv run mypy -p pdfextractor` en limpio.
 
 **Dependencies:** Task 8
 
