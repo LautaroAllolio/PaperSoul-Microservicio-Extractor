@@ -106,9 +106,7 @@ async def test_canary_document_content_and_filename_never_reach_the_logs(
     assert logged["bytes"] == len(body)
 
 
-async def test_a_failed_extraction_logs_error_outcome_and_counts_422(
-    client, captured_logs
-) -> None:
+async def test_a_failed_extraction_logs_error_outcome_and_counts_422(client, captured_logs) -> None:
     await _post(client, b"not a pdf at all")
 
     records = [json.loads(line) for line in captured_logs.lines]
