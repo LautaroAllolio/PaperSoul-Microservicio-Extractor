@@ -32,7 +32,10 @@ Plan: `docs/tasks/plan.md`. Flujo: TDD estricto (rojo → verde) + pausa obligat
       prometheus-client promovidos a dependencias runtime, `httpx` movido a dev, extra
       `extractor` y `respx` eliminados (huérfanos). Test de identidad **3/3 verde**;
       suite 98 passed/2 skipped; ruff + mypy limpios. `uv.lock` regenerado.
-- [ ] **TASK-04: CI** `.github/workflows/ci.yml` solo `pdfextractor` (mypy -p pdfextractor)
+- [x] **TASK-04: CI** `.github/workflows/ci.yml` solo `pdfextractor` (mypy -p pdfextractor):
+      quitado `--extra extractor`, el doble `mypy -p paperextractor`, el input
+      `run_contract_tests`, la secret `EXTRACTOR_BASE_URL` y el paso `-m contract`
+      (huérfanos tras eliminar el orquestador). YAML válido; pasos CI verificados localmente.
 
 ### Checkpoint CP-2: Identidad
 - [ ] `uv`/build sano; `grep -r paperextractor` vacío

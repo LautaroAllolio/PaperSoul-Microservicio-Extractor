@@ -6,12 +6,6 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
-    inputs:
-      run_contract_tests:
-        description: "Run contract tests against real downstream"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   build:
@@ -30,7 +24,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --dev --extra extractor
+        run: uv sync --dev
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -39,13 +33,7 @@ jobs:
         run: uv run ruff format --check src tests
 
       - name: Type check (mypy)
-        run: uv run mypy -p paperextractor && uv run mypy -p pdfextractor
+        run: uv run mypy -p pdfextractor
 
-      - name: Test (unit + integration, no contract)
+      - name: Test
         run: uv run pytest -q
-
-      - name: Contract tests (optional)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_contract_tests }}
-        env:
-          EXTRACTOR_BASE_URL: ${{ secrets.EXTRACTOR_BASE_URL }}
-        run: uv run pytest -m contract -q
