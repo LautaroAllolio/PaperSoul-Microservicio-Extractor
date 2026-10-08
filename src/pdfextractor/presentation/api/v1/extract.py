@@ -47,7 +47,7 @@ async def extract_document(
         started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(service.extract, bytes(buffer)),
+                asyncio.to_thread(service.extract, buffer),
                 timeout=settings.extraction_timeout_seconds,
             )
         except TimeoutError as exc:

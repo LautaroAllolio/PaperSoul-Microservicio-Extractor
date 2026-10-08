@@ -21,7 +21,7 @@ class PyMuPDFExtractor:
 
     method = "pymupdf"
 
-    def extract(self, data: bytes) -> tuple[str, int]:
+    def extract(self, data: bytes | bytearray) -> tuple[str, int]:
         """Return ``(text, page_count)`` for one PDF document.
 
         Raises ``EncryptionError`` for password-protected documents and

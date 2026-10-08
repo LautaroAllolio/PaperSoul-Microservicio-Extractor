@@ -9,6 +9,6 @@ class TextExtractor(Protocol):
 
     method: str
 
-    def extract(self, data: bytes) -> tuple[str, int]:
+    def extract(self, data: bytes | bytearray) -> tuple[str, int]:
         """Return the concatenated text of every page and the page count."""
         ...

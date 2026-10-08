@@ -20,7 +20,7 @@ from pdfextractor.infrastructure.extraction.pymupdf_extractor import PyMuPDFExtr
 __all__ = ["ProcessPoolTextExtractor", "ReadyState", "pymupdf_extract"]
 
 
-def pymupdf_extract(data: bytes) -> tuple[str, int]:
+def pymupdf_extract(data: bytes | bytearray) -> tuple[str, int]:
     """Module-level worker entry so the process pool can pickle the job."""
     return PyMuPDFExtractor().extract(data)
 
@@ -100,7 +100,7 @@ class ProcessPoolTextExtractor:
         queue_timeout: float,
         extraction_timeout: float,
         ready_state: ReadyState | None = None,
-        job: Callable[[bytes], tuple[str, int]] = pymupdf_extract,
+        job: Callable[[bytes | bytearray], tuple[str, int]] = pymupdf_extract,
     ) -> None:
         self._workers = workers
         self._job = job
@@ -113,7 +113,7 @@ class ProcessPoolTextExtractor:
         self._closed = False
         self._lifecycle = threading.Lock()
 
-    def extract(self, data: bytes) -> tuple[str, int]:
+    def extract(self, data: bytes | bytearray) -> tuple[str, int]:
         if self._closed:
             raise RuntimeError("extractor is closed")
         if not self._gate.acquire(self._queue_timeout):

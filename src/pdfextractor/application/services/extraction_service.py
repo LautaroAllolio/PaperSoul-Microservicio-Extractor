@@ -41,7 +41,7 @@ class ExtractionService:
         self._extractor = extractor
         self._min_text_length = min_text_length
 
-    def extract(self, data: bytes) -> ExtractionResult:
+    def extract(self, data: bytes | bytearray) -> ExtractionResult:
         if not data:
             raise EmptyFileError()
         text, page_count = self._extractor.extract(data)
