@@ -41,35 +41,35 @@ constante, sin bases de datos ni lógica de negocio.
 - [x] Restaurar la épica desde `64fc7d7`; validar con pytest (324 tests recopilados).
 - [x] Archivar el plan previo en `docs/tasks/archive/`.
 
-### Paso 1: Auditoría y Estructura (ACTIVO)
-- [ ] **TASK-01: Test de identidad estructural/funcional (ROJO)** — el repo es
+### Paso 1: Auditoría y Estructura (COMPLETADO)
+- [x] **TASK-01: Test de identidad estructural/funcional (ROJO)** — el repo es
       únicamente el microservicio `pdfextractor`: ni `src/paperextractor/` ni sus tests/docs;
       `pyproject` se identifica como `pdfextractor`; la API levanta y responde el contrato
       básico con identidad extractor (`/health` → `service: pdfextractor`).
-- [ ] **TASK-02: Eliminar el orquestador** — borrar `src/paperextractor/`, `tests/unit/`,
+- [x] **TASK-02: Eliminar el orquestador** — borrar `src/paperextractor/`, `tests/unit/`,
       `tests/integration/`, `tests/harness.py`, `tests/fakes.py`, `tests/contract/`,
       `tests/extractor/contract/`, `docs/SPEC-paperextractor.md` → el test estructural
       y funcional del identidad vira a verde; la suite completa sigue verde. El assert de
       metadata (`pyproject name = pdfextractor`) queda rojo hasta TASK-03.
 
 ### Checkpoint CP-1: Estructura
-- [ ] Suite completa + ruff + mypy verdes; test de identidad verde; revisión con humano.
+- [x] Suite completa + ruff + mypy verdes; test de identidad verde; revisión con humano.
 
 ### Paso 2: Identidad del proyecto
-- [ ] **TASK-03: `pyproject.toml` → `pdfextractor`** (name, description, wheel packages,
+- [x] **TASK-03: `pyproject.toml` → `pdfextractor`** (name, description, wheel packages,
       known-first-party) y `.env.example` con bloque `PDFEXTRACTOR_*`.
-- [ ] **TASK-04: CI** (`.github/workflows/ci.yml`) apuntando solo a `pdfextractor`.
+- [x] **TASK-04: CI** (`.github/workflows/ci.yml`) apuntando solo a `pdfextractor`.
 
 ### Checkpoint CP-2: Identidad
-- [ ] Build sano, `grep -r paperextractor` vacío, revisión con humano.
+- [x] Build sano, `grep -r paperextractor` vacío, revisión con humano.
 
 ### Paso 3: Documentación, contrato y cierre
-- [ ] **TASK-05: Documentación** — README/docs de un único microservicio y contrato REST
+- [x] **TASK-05: Documentación** — README/docs de un único microservicio y contrato REST
       documentado (`POST /api/v1/extract` → 200 JSON estricto; errores en `{"error", ...}`).
-- [ ] **TASK-06: Verificación integral** — suite completa + lint + types + `-m memory` verdes.
+- [x] **TASK-06: Verificación integral** — suite completa + lint + types + `-m memory` verdes.
 
 ### Checkpoint: Complete
-- [ ] Todas las acceptance criteria cumplidas; listo para PR único.
+- [x] Todas las acceptance criteria cumplidas; listo para PR único.
 
 ## Riesgos y Mitigaciones
 
@@ -82,6 +82,7 @@ constante, sin bases de datos ni lógica de negocio.
 
 ## Open Questions
 
-1. ¿Re-aplicar después de la unificación el endurecimiento §6.x perdido (TASK-03..06 del plan
-   archivado, sin commit)? → Sugerencia: sí, ya que el memory-gate sigue rojo en este branch.
+1. Re-aplicar el endurecimiento §6.x perdido (reset, sin commit): **parcialmente resuelto** — en
+   TASK-06 el memory-gate de identidad zero-copy quedó rojo y se re-aplicó el ancho `bytes |
+   bytearray` (puerto/servicio/adaptador/pool + ruta sin copia); `-m memory` verde (2/2).
 2. ¿El directorio `graphify-out/` del repo es del usuario o generado? → No se toca.

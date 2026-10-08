@@ -22,8 +22,8 @@ Plan: `docs/tasks/plan.md`. Flujo: TDD estricto (rojo → verde) + pausa obligat
       ⚠ El test de metadata (`pyproject name = pdfextractor`) queda rojo hasta TASK-03.
 
 ### Checkpoint CP-1: Estructura
-- [ ] Suite completa + ruff + mypy verdes; test de identidad verde
-- [ ] Revisión con humano
+- [x] Suite completa + ruff + mypy verdes; test de identidad verde
+- [x] Revisión con humano (TASK-01..02 aprobadas y commiteadas)
 
 ## Paso 2: Identidad del proyecto
 
@@ -38,13 +38,21 @@ Plan: `docs/tasks/plan.md`. Flujo: TDD estricto (rojo → verde) + pausa obligat
       (huérfanos tras eliminar el orquestador). YAML válido; pasos CI verificados localmente.
 
 ### Checkpoint CP-2: Identidad
-- [ ] `uv`/build sano; `grep -r paperextractor` vacío
-- [ ] Revisión con humano
+- [x] `uv`/build sano (`pdfextractor-0.1.0`); `grep -r paperextractor` vacío en src/config/README/.github
+- [x] Revisión con humano (TASK-03..04 aprobadas y commiteadas)
 
 ## Paso 3: Documentación, contrato y cierre
 
-- [ ] **TASK-05: README/docs + contrato REST** documentado (PDF → JSON estricto)
-- [ ] **TASK-06: Verificación integral** — suite + lint + types + `-m memory`
+- [x] **TASK-05: README/docs + contrato REST** documentado (PDF → JSON estricto):
+      `README.md` reescrito para el extractor (zero-disk, memoria acotada, endpoints,
+      env `PDFEXTRACTOR_*`, errores); nuevo `docs/api-contract.md` (contrato estricto
+      con códigos y garantías); marcador `contract` huérfano removido de `tests/conftest.py`.
+- [x] **TASK-06: Verificación integral** — suite + lint + types + `-m memory`. Al
+      ejecutar el memory gate quedó rojo `test_...without_copying` (endurecimiento
+      zero-copy perdido en el reset): re-aplicado el ancho `bytes | bytearray` en
+      puerto/servicio/extractor/pool y la ruta entrega el buffer del pool sin copia.
+      Resultado final: **98 passed/2 skipped**, `-m memory` **2 passed**, ruff + mypy
+      limpios, `uv build` produce `dist/pdfextractor-0.1.0-*.whl`.
 
 ### Checkpoint: Complete
-- [ ] Todas las acceptance criteria cumplidas; listo para PR único
+- [x] Todas las acceptance criteria cumplidas; listo para PR único
