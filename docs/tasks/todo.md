@@ -15,9 +15,11 @@ Plan: `docs/tasks/plan.md`. Flujo: TDD estricto (rojo → verde) + pausa obligat
       `harness.py`, `fakes.py`, `tests/extractor/contract`, sin `docs/SPEC-paperextractor.md`);
       `pyproject` con `name = pdfextractor` y wheel `["src/pdfextractor"]`;
       `/health` responde `service: pdfextractor`
-- [ ] **TASK-02: Eliminar el orquestador** — `src/paperextractor/`, `tests/unit/`,
+- [x] **TASK-02: Eliminar el orquestador** — `src/paperextractor/`, `tests/unit/`,
       `tests/integration/`, `tests/harness.py`, `tests/fakes.py`, `tests/contract/`,
-      `tests/extractor/contract/`, `docs/SPEC-paperextractor.md` → test de identidad verde
+      `tests/extractor/contract/`, `docs/SPEC-paperextractor.md` eliminados (49 ficheros).
+      Test estructural y funcional de identidad en verde; suite 97 passed/2 skipped.
+      ⚠ El test de metadata (`pyproject name = pdfextractor`) queda rojo hasta TASK-03.
 
 ### Checkpoint CP-1: Estructura
 - [ ] Suite completa + ruff + mypy verdes; test de identidad verde

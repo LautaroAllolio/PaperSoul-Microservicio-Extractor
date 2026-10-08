@@ -33,9 +33,7 @@ def test_project_metadata_identifies_the_extractor() -> None:
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == [
         "src/pdfextractor"
     ]
-    assert pyproject["tool"]["ruff"]["lint"]["isort"]["known-first-party"] == [
-        "pdfextractor"
-    ]
+    assert pyproject["tool"]["ruff"]["lint"]["isort"]["known-first-party"] == ["pdfextractor"]
 
 
 async def test_the_api_answers_the_basic_contract_with_the_extractor_identity(client) -> None:

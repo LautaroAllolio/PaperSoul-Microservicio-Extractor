@@ -48,8 +48,9 @@ constante, sin bases de datos ni lógica de negocio.
       básico con identidad extractor (`/health` → `service: pdfextractor`).
 - [ ] **TASK-02: Eliminar el orquestador** — borrar `src/paperextractor/`, `tests/unit/`,
       `tests/integration/`, `tests/harness.py`, `tests/fakes.py`, `tests/contract/`,
-      `tests/extractor/contract/`, `docs/SPEC-paperextractor.md` → el test de identidad vira a
-      verde y la suite completa sigue verde.
+      `tests/extractor/contract/`, `docs/SPEC-paperextractor.md` → el test estructural
+      y funcional del identidad vira a verde; la suite completa sigue verde. El assert de
+      metadata (`pyproject name = pdfextractor`) queda rojo hasta TASK-03.
 
 ### Checkpoint CP-1: Estructura
 - [ ] Suite completa + ruff + mypy verdes; test de identidad verde; revisión con humano.
