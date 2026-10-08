@@ -219,3 +219,12 @@ __marimo__/
 
 # Graphify local output
 graphify-out/
+
+# Pruebas de K6 y Vegeta
+load-tests/*.bin
+load-tests/*.html
+load-tests/*.json
+load-tests/*-report*.txt
+load-tests/k6-output.txt
+docs/pdfs/
+load-tests/k6-run3-saturado.txt

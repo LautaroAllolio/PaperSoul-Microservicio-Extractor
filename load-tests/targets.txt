@@ -1,0 +1,6 @@
+GET http://127.0.0.1:18011/health
+GET http://127.0.0.1:18011/ready
+GET http://127.0.0.1:18011/metrics
+POST http://127.0.0.1:18011/api/v1/extract
+POST http://127.0.0.1:18011/api/v1/extract
+POST http://127.0.0.1:18011/api/v1/extract
