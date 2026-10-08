@@ -27,8 +27,11 @@ Plan: `docs/tasks/plan.md`. Flujo: TDD estricto (rojo → verde) + pausa obligat
 
 ## Paso 2: Identidad del proyecto
 
-- [ ] **TASK-03: `pyproject.toml` → `pdfextractor`** (name, description, packages,
-      known-first-party) + `.env.example` con bloque `PDFEXTRACTOR_*`
+- [x] **TASK-03: `pyproject.toml` → `pdfextractor`** (name, description, packages,
+      known-first-party) + `.env.example` con bloque `PDFEXTRACTOR_*`. Además: pymupdf y
+      prometheus-client promovidos a dependencias runtime, `httpx` movido a dev, extra
+      `extractor` y `respx` eliminados (huérfanos). Test de identidad **3/3 verde**;
+      suite 98 passed/2 skipped; ruff + mypy limpios. `uv.lock` regenerado.
 - [ ] **TASK-04: CI** `.github/workflows/ci.yml` solo `pdfextractor` (mypy -p pdfextractor)
 
 ### Checkpoint CP-2: Identidad
