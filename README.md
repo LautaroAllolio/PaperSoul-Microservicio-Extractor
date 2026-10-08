@@ -1,13 +1,22 @@
-# PaperExtractor
+# pdfextractor
 
-PaperExtractor es un microservicio HTTP que recibe documentos en formato `multipart/form-data` y los retransmite al *Extractor* downstream para su procesamiento. Sigue arquitectura hexagonal (Presentation → Application → Infrastructure), no almacena bytes del documento en disco, reléa el body por streaming byte a byte y devuelve respuestas con RFC 9457 para errores.
+Microservicio FastAPI de extracción **PDF → JSON**: recibe un PDF por `multipart/form-data`, lo procesa en memoria (pymupdf) y devuelve el texto plano extraído. Sigue arquitectura hexagonal (Presentation → Application → Infrastructure), **no escribe nada en disco**, mantiene un consumo de memoria acotado y habla un dialecto de errores compacto (`{"error": "..."}`).
+
+## Características
+
+- **Zero-disk, constante en memoria**: el body se encuadra en memoria (stdlib, sin `python-multipart`, sin `UploadFile`); los buffers se reutilizan vía pool acotado.
+- **Cómputo aislado**: extracción en process pool con tope de concurrencia y cola; bajo overload responde `503 {"error": "overloaded"}`.
+- **Límites**: tamaño máximo de upload, timeout de cola y timeout de extracción configurables.
+- **Correlación**: header `X-Request-Id` (se hereda o se genera) y logs JSON estructurados.
+- **Observabilidad**: `GET /metrics` (Prometheus, opcional) y `GET /health` + `GET /ready`.
+- **Seguridad**: mensajes de error acotados; nunca se propagan detalles internos ni bytes del documento.
 
 ## Arquitectura
 
-- **Streaming sin buffer**: el upload se reléa chunk a chunk usando `AsyncByteSource` (`RequestByteSource`), sin parsear el multipart completo en memoria.
-- **Lifespan**: un único `HttpExtractorClient` (pool HTTP) por aplicación, creado al iniciar y cerrado al finalizar.
-- **DI**: dependencias resueltas en `presentation/api/deps.py` (DIP). Routers solo conocen puertos.
-- **Errores**: 4 handlers globales mapean errores de dominio a RFC 9457 (`application/problem+json`).
+- **Hexagonal**: routers solo conocen puertos (`interfaces.py`); el servicio de aplicación define la frontera; la infraestructura (pymupdf, process pool, reader multipart, middleware) queda detrás.
+- **Flujo**: `Request.stream()` → `read_multipart_file` (framing en `bytearray` del pool) → `ExtractionService` → `ProcessPoolTextExtractor` (pymupdf en worker) → respuesta `ExtractResponse`.
+- **Gestión de recursos**: todo recurso (settings, pool, extractor, métricas) se crea en el *lifespan* de FastAPI y se cierra al terminar.
+- **Errores**: handlers globales mapean excepciones de dominio a status + `{"error"}`; cualquier excepción no esperada degrada a `500 {"error": "internal"}`.
 
 ## Requisitos
 
@@ -22,132 +31,80 @@ uv sync --dev
 
 ## Configuración
 
-Variables de entorno (ver `.env.example`):
+Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 
 | Variable | Valor por defecto | Descripción |
 |---|---|---|
-| `PAPEREXTRACTOR_HOST` | `0.0.0.0` | Host del servidor |
-| `PAPEREXTRACTOR_PORT` | `8000` | Puerto del servidor |
-| `PAPEREXTRACTOR_EXTRACTOR_BASE_URL` | `http://extractor:8000` | Base URL del Extractor downstream |
-| `PAPEREXTRACTOR_MAX_UPLOAD_BYTES` | `52428800` | Límite de subida (50 MB) |
-| `PAPEREXTRACTOR_HTTP_TIMEOUT_CONNECT_SECONDS` | `5` | Timeout de conexión |
-| `PAPEREXTRACTOR_HTTP_TIMEOUT_READ_SECONDS` | `120` | Timeout de lectura |
-| `PAPEREXTRACTOR_HTTP_TIMEOUT_WRITE_SECONDS` | `120` | Timeout de escritura |
-| `PAPEREXTRACTOR_HTTP_TIMEOUT_POOL_SECONDS` | `5` | Timeout de pool |
-| `PAPEREXTRACTOR_HTTP_MAX_CONNECTIONS` | `100` | Conexiones máximas |
-| `PAPEREXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
+| `PDFEXTRACTOR_HOST` | `0.0.0.0` | Host del servidor |
+| `PDFEXTRACTOR_PORT` | `8001` | Puerto del servidor |
+| `PDFEXTRACTOR_MAX_UPLOAD_BYTES` | `52428800` | Límite del `file` (50 MB) |
+| `PDFEXTRACTOR_MIN_TEXT_LENGTH` | `10` | Mínimo de caracteres extraídos para considerar éxito |
+| `PDFEXTRACTOR_WORKERS` | *(uno por CPU)* | Workers del process pool |
+| `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS` | *(= workers)* | Tope de extracciones concurrentes (pool + cola) |
+| `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` | `5.0` | Espera máxima en cola antes de `503` |
+| `PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS` | `30.0` | Tope por extracción antes de `504` |
+| `PDFEXTRACTOR_METRICS_ENABLED` | `true` | Monta `GET /metrics` |
+| `PDFEXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
 
 ## Ejecución
 
-Modo desarrollo (Uvicorn):
+Modo desarrollo:
 
 ```bash
-uv run uvicorn paperextractor.main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 Modo producción (sin reload):
 
 ```bash
-uv run uvicorn paperextractor.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001
 ```
 
 ## Contrato público
 
-### `GET /health` (liveness)
-Sin dependencias externas. Retorna 200:
+Documentación completa y estricta: [`docs/api-contract.md`](docs/api-contract.md).
 
-```json
-{
-  "status": "ok",
-  "service": "paperextractor",
-  "version": "0.1.0",
-  "timestamp": "2026-09-22T12:00:00Z"
-}
-```
+| Endpoint | Método | Descripción |
+|---|---|---|
+| `/health` | GET | Liveness: `200 {"status":"ok","service":"pdfextractor","version":"..."}` |
+| `/ready` | GET | Readiness: `200 {"status":"ready"}` o `503 {"status":"not ready"}` |
+| `/api/v1/extract` | POST | `multipart/form-data`, campo `file` → `200` con texto/duración/páginas |
+| `/metrics` | GET | Prometheus text (solo si `PDFEXTRACTOR_METRICS_ENABLED=true`) |
 
-### `GET /ready` (readiness)
-Sondea al Extractor via `GET {EXTRACTOR_BASE_URL}/health` (usando `ExtractorClient.ping()`).
-
-- 200: Extractor alcanzable
-```json
-{
-  "status": "ready",
-  "downstream": {"extractor": "reachable"},
-  "timestamp": "2026-09-22T12:00:00Z"
-}
-```
-- 503 + `application/problem+json`: Extractor no alcanzable (DNS/refused/timeout de red)
-```json
-{
-  "type": "https://papersoul.dev/problems/upstream-unavailable",
-  "title": "Upstream Unavailable",
-  "status": 503,
-  "detail": "The Extractor is unreachable",
-  "instance": "/ready"
-}
-```
-
-### `POST /api/v1/extract` (extracción)
-Recibe `multipart/form-data` con un archivo. Responde 200 con envelope de PaperExtractor (nunca payload crudo del Extractor):
-
-```json
-{
-  "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "document": {
-    "extracted_text": "Texto plano extraído del PDF...",
-    "page_count": 4,
-    "extraction_method": "pymupdf"
-  },
-  "orchestration": {
-    "downstream_service": "extractor",
-    "duration_ms": 142
-  }
-}
-```
-
-#### Ejemplo `curl`
+Ejemplo `curl`:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/extract \
-  -H "Content-Type: multipart/form-data" \
+curl -X POST http://localhost:8001/api/v1/extract \
   -F "file=@/ruta/contrato.pdf;type=application/pdf"
 ```
 
-> Importante: el servidor reléa bytes tal cual llegan. En despliegues detrás de proxy inverso (Nginx/Ingress), debe desactivarse el buffering de request para preservar streaming: `proxy_request_buffering off`.
+> En despliegues detrás de proxy inverso (Nginx/Ingress), mantener `proxy_request_buffering off` para preservar el streaming de subida (el body nunca debe spoolearse a disco).
 
-## Flujo de streaming
+## Map de errores
 
-1. FastAPI recibe `Request.stream()` (no `UploadFile`). 
-2. `RequestByteSource` adapta a `AsyncByteSource` (chunk por chunk).
-3. Preanálisis: lee ventana mínima para detectar filename (`sniff_multipart_filename`) sin almacenar todo el body.
-4. `HttpExtractorClient.forward()` envía los bytes al Extractor usando streaming (nunca se reconstruye el multipart). 
-5. Solo la respuesta JSON pequeña del Extractor se lee en memoria.
-6. Respuesta final es el envelope propio de PaperExtractor.
+Respuestas de error (siempre `Content-Type: application/json`):
 
-## Mapa de errores (RFC 9457)
-
-| # | Condición | Status | `type` | `title` |
-|---|---|---|---|---|
-| 1 | Falta `multipart/form-data`/`boundary` o campo requerido | 422 | `https://papersoul.dev/problems/invalid-request` | Invalid Request |
-| 2 | Error validación esquema | 422 | `https://papersoul.dev/problems/validation-error` | Validation Error |
-| 3 | Archivo excede `MAX_UPLOAD_BYTES` | 413 | `https://papersoul.dev/problems/payload-too-large` | Payload Too Large |
-| 4 | Extractor 422 | 422 | `https://papersoul.dev/problems/extraction-failed` | Extraction Failed |
-| 5 | Extractor 5xx | 502 | `https://papersoul.dev/problems/upstream-error` | Upstream Error |
-| 6 | Timeout (conexión/lectura) | 504 | `https://papersoul.dev/problems/upstream-timeout` | Upstream Timeout |
-| 7 | Extractor inalcanzable (refused/DNS) | 502 | `https://papersoul.dev/problems/upstream-unavailable` | Upstream Unavailable |
-| 8 | URL Extractor sin configurar | 500 | `https://papersoul.dev/problems/configuration-error` | Configuration Error |
-| 9 | Excepción no controlada | 500 | `https://papersoul.dev/problems/internal-error` | Internal Error |
-
-Todas las respuestas de error usan `Content-Type: application/problem+json` y `instance` = ruta del endpoint.
+| Condición | Status | `{"error"}` |
+|---|---|---|
+| `file` excede `PDFEXTRACTOR_MAX_UPLOAD_BYTES` | 413 | `archivo demasiado grande` |
+| Falta boundary o body multipart inválido | 422 | `multipart inválido` / `multipart sin boundary` |
+| Falta el campo `file` | 422 | `campo file ausente` |
+| `file` presente pero vacío | 422 | `archivo vacío` |
+| PDF cifrado con contraseña | 422 | `no se pudo leer: cifrado` |
+| Texto extraído < `PDFEXTRACTOR_MIN_TEXT_LENGTH` | 422 | `sin texto extraíble` |
+| PDF corrupto / no legible / 0 páginas | 422 | `no se pudo leer` |
+| Cola llena (overload) | 503 | `overloaded` |
+| Tiempo de extracción excedido | 504 | `timeout` |
+| Error interno no esperado | 500 | `internal` |
 
 ## Tests
 
 ```bash
-# Unit + integration (sin contract)
+# Suite completa (unit + integración del extractor)
 uv run pytest -q
 
-# Con contract tests (requiere Extractor real y EXTRACTOR_BASE_URL)
-EXTRACTOR_BASE_URL=http://extractor:8000 uv run pytest -m contract -q
+# Pruebas de techo de memoria (RSS acotado)
+uv run pytest -m memory -q
 ```
 
 ## Calidad
@@ -155,11 +112,11 @@ EXTRACTOR_BASE_URL=http://extractor:8000 uv run pytest -m contract -q
 ```bash
 uv run ruff check .
 uv run ruff format --check src tests
-uv run mypy -p paperextractor
+uv run mypy -p pdfextractor
 ```
 
 ## Despliegue
 
-- **Proxy inverso (Nginx/Ingress):** establecer `proxy_request_buffering off` para no interrumpir el streaming del upload.
-- **Límites:** ajustar `PAPEREXTRACTOR_MAX_UPLOAD_BYTES` acorde a recursos.
-- **Readiness/Liveness:** usar `/ready` para health checks de dependencias y `/health` para liveness.
+- **Proxy inverso (Nginx/Ingress):** `proxy_request_buffering off` para no spoolear el upload.
+- **Health checks:** `/health` para liveness, `/ready` para readiness (refleja overload).
+- **Escalado:** el límite de memoria lo fija `PDFEXTRACTOR_MAX_UPLOAD_BYTES` × `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`, ambos configurables.
