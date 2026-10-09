@@ -60,9 +60,9 @@ se aceptan otros campos; el conteo de partes se resuelve con el primer `file`.
 }
 ```
 
-- `extracted_text`: texto plano del documento (≥ `PDFEXTRACTOR_MIN_TEXT_LENGTH` caracteres).
+- `extracted_text`: texto plano del documento (≥ `PDFEXTRACTOR_MIN_TEXT_LENGTH` caracteres, ≤ `PDFEXTRACTOR_MAX_EXTRACTED_CHARS`).
 - `extraction_method`: motor de extracción (hoy siempre `pymupdf`).
-- `page_count`: páginas del PDF.
+- `page_count`: páginas del PDF (≤ `PDFEXTRACTOR_MAX_PAGES`).
 
 **Semántica de concurrencia**
 - Las extracciones corren en un process pool con tope `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`.
@@ -87,7 +87,10 @@ curl -i -X POST http://localhost:8001/api/v1/extractions \
 
 | HTTP | `{"error"}` | Condición |
 |---|---|---|
+| 404 | `no encontrado` | ruta desconocida |
+| 405 | `método no permitido` | método no soportado por la ruta |
 | 413 | `archivo demasiado grande` | el `file` excede `PDFEXTRACTOR_MAX_UPLOAD_BYTES` (mid-stream o por `Content-Length`) |
+| 422 | `solicitud inválida` | validación del request por FastAPI (params/path/body) |
 | 422 | `multipart sin boundary` | falta `boundary` en `Content-Type` |
 | 422 | `multipart inválido` | body no frameable / truncado |
 | 422 | `campo file ausente` | no hay parte llamada `file` |
@@ -95,6 +98,8 @@ curl -i -X POST http://localhost:8001/api/v1/extractions \
 | 422 | `no se pudo leer: cifrado` | PDF protegido por contraseña |
 | 422 | `sin texto extraíble` | texto extraído < `PDFEXTRACTOR_MIN_TEXT_LENGTH` |
 | 422 | `no se pudo leer` | PDF corrupto, no-PDF o sin páginas |
+| 422 | `demasiadas páginas` | página_count > `PDFEXTRACTOR_MAX_PAGES` (anti decompression-bomb) |
+| 422 | `texto excesivo` | texto extraído > `PDFEXTRACTOR_MAX_EXTRACTED_CHARS` (anti decompression-bomb) |
 | 503 | `overloaded` | cola llena y timeout de cola agotado |
 | 504 | `timeout` | extracción > `PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS` |
 | 500 | `internal` | error interno no esperado (nunca con detalle interno) |
