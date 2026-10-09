@@ -64,6 +64,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ExtractionService(
                 extractor=extractor,
                 min_text_length=resolved.min_text_length,
+                max_pages=resolved.max_pages,
+                max_extracted_chars=resolved.max_extracted_chars,
             ),
         )
         app.state.ready = True
