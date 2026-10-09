@@ -142,6 +142,32 @@ async def test_after_a_request_metrics_expose_every_planned_value(client) -> Non
     assert "extractor_worker_restarts_total 0.0" in body
 
 
+async def test_metrics_expose_process_and_gc_collectors(client) -> None:
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "python_gc_objects_collected_total" in response.text
+    assert "process_cpu_seconds_total" in response.text
+
+
+async def test_metrics_render_runs_off_the_event_loop(monkeypatch, client) -> None:
+    from pdfextractor.presentation.api.v1 import metrics as metrics_api
+
+    calls: list[str] = []
+    real = metrics_api.run_in_threadpool
+
+    async def spy(func, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await real(func, *args, **kwargs)
+
+    monkeypatch.setattr(metrics_api, "run_in_threadpool", spy)
+
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "render" in calls
+
+
 async def test_metrics_are_not_mounted_when_disabled() -> None:
     app = create_app(Settings(workers=1, metrics_enabled=False))
     async with app.router.lifespan_context(app):

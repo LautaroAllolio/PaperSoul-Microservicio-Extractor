@@ -1,4 +1,4 @@
-"""Prometheus metrics for the Extractor (plan-extractor.md § 6).
+"""Prometheus metrics for the Extractor (docs/tasks/plan.md § 6).
 
 Each application instance owns a private ``CollectorRegistry`` so parallel apps
 in one process (tests, embedded deployments) never mix counters. The gauges are
@@ -9,6 +9,9 @@ counter accumulates the delta since the previous scrape.
 from dataclasses import dataclass
 
 from prometheus_client import (
+    GC_COLLECTOR,
+    PLATFORM_COLLECTOR,
+    PROCESS_COLLECTOR,
     CollectorRegistry,
     Counter,
     Gauge,
@@ -72,6 +75,9 @@ class Metrics:
 def create_metrics() -> Metrics:
     """Build a fresh registry plus every metric the plan defines."""
     registry = CollectorRegistry()
+    registry.register(PROCESS_COLLECTOR)
+    registry.register(PLATFORM_COLLECTOR)
+    registry.register(GC_COLLECTOR)
     return Metrics(
         registry=registry,
         requests_total=Counter(
