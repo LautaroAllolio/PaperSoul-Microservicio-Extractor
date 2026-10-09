@@ -4,17 +4,18 @@ The request-id middleware is the single owner of the correlation id: it takes
 the inbound ``X-Request-Id`` or mints one, stores it on the request and echoes
 it outbound. The size backstop rejects a body whose declared ``Content-Length``
 exceeds the ceiling before any processing starts — the streaming reader is the
-belt, this is the suspenders. The per-job timeout wraps the extraction in
-``wait_for`` so a stalled extractor answers ``504 {"error": "timeout"}``
-instead of holding the request forever.
+belt, this is the suspenders. The process pool owns the single extraction
+timeout, so a stalled job answers ``504 {"error": "timeout"}`` without holding
+the request forever.
 """
 
-import time
-
 import httpx
+from _workers import stalled_job
 from fastapi import FastAPI
 
 from pdfextractor.application.errors import ExtractionTimeoutError, PdfExtractorError
+from pdfextractor.application.services.extraction_service import ExtractionService
+from pdfextractor.infrastructure.concurrency.pool import ProcessPoolTextExtractor
 from pdfextractor.infrastructure.config.settings import Settings
 from pdfextractor.main import create_app
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
@@ -80,21 +81,27 @@ async def test_declared_content_length_over_the_limit_is_rejected_before_process
     assert response.json() == {"error": "archivo demasiado grande"}
 
 
-class _SlowService:
-    def extract(self, data: bytes) -> tuple[str, int]:
-        time.sleep(2.0)
-        return "too late", 1
-
-
-async def test_a_job_that_exceeds_the_timeout_answers_504_timeout() -> None:
-    app = create_app(Settings(workers=1, extraction_timeout_seconds=0.2))
+async def test_a_job_that_exceeds_the_pool_timeout_answers_504_timeout() -> None:
+    app = create_app(Settings(workers=1, max_concurrent_extractions=1, queue_timeout_seconds=1.0))
 
     async for client in _client_for(app):
-        setattr(client.app.state, EXTRACTION_SERVICE, _SlowService())
+        extractor = ProcessPoolTextExtractor(
+            workers=1,
+            max_concurrent=1,
+            queue_timeout=1.0,
+            extraction_timeout=0.2,
+            job=stalled_job,
+        )
+        setattr(
+            client.app.state,
+            EXTRACTION_SERVICE,
+            ExtractionService(extractor=extractor, min_text_length=0),
+        )
         body, content_type = multipart(b"slow payload")
         response = await client.post(
             "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
+        extractor.close()
 
     assert response.status_code == 504
     assert response.json() == {"error": "timeout"}

@@ -13,7 +13,6 @@ import io
 import pymupdf
 
 from pdfextractor.application.errors import EncryptionError, UnreadableError
-from pdfextractor.application.interfaces import TextExtractor
 
 
 class PyMuPDFExtractor:
@@ -47,6 +46,3 @@ class PyMuPDFExtractor:
                 except Exception as error:
                     raise UnreadableError() from error
                 return text, document.page_count
-
-
-_text_extractor_port: TextExtractor = PyMuPDFExtractor()
