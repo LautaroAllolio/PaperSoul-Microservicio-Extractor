@@ -249,6 +249,36 @@ async def test_reader_never_opens_a_temporary_file(monkeypatch: pytest.MonkeyPat
     assert bytes(result) == _content(4_096)
 
 
+async def test_endless_part_headers_are_rejected_without_unbounded_growth() -> None:
+    reader = multipart_reader._MultipartReader(
+        boundary=BOUNDARY, max_bytes=HUGE_LIMIT, sink=bytearray()
+    )
+    reader.feed(b"--" + BOUNDARY.encode("latin-1") + b"\r\n")
+    header = b'Content-Disposition: form-data; name="file"; filename="doc.pdf"\r\n'
+
+    with pytest.raises(MalformedMultipartError):
+        for _ in range(200_000):
+            reader.feed(header)
+            assert len(reader._buf) < 64 * 1024
+
+
+async def test_a_stream_with_never_ending_headers_is_aborted_early() -> None:
+    consumed = 0
+
+    async def endless() -> AsyncIterator[bytes]:
+        nonlocal consumed
+        yield b"--" + BOUNDARY.encode("latin-1") + b"\r\n"
+        for _ in range(20_000):
+            consumed += 1
+            yield b'Content-Disposition: form-data; name="file"\r\n'
+
+    with pytest.raises(MalformedMultipartError) as exc_info:
+        await read_multipart_file(endless(), boundary=BOUNDARY, max_bytes=HUGE_LIMIT)
+
+    assert exc_info.value.status == 422
+    assert consumed < 5_000
+
+
 def test_reader_module_imports_stay_off_disk_and_http_parsers() -> None:
     module_path = Path(multipart_reader.__file__)
     assert module_path is not None

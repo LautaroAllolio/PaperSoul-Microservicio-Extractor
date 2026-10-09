@@ -9,7 +9,8 @@ spools large uploads to disk, and the orchestrator's invariant test requires
 
 The size guard trips *during* the stream: as soon as the accumulated ``file``
 bytes exceed ``max_bytes`` the reader raises ``OversizedError`` without
-draining the rest of the body.
+draining the rest of the body. A part's header block is likewise capped so a
+body with never-terminating headers cannot grow the parse buffer without bound.
 """
 
 from collections.abc import AsyncIterator
@@ -28,6 +29,8 @@ _BOUNDARY_END = 1
 _HEADERS = 2
 _FILE = 3
 _SKIP = 4
+
+_MAX_PART_HEADER_BYTES = 16 * 1024
 
 
 def boundary_from_content_type(content_type: str) -> str:
@@ -142,8 +145,12 @@ class _MultipartReader:
         ends = [(index, 4) for index in (crlf,) if index >= 0]
         ends.extend((index, 2) for index in (line_feed,) if index >= 0)
         if not ends:
+            if len(self._buf) > _MAX_PART_HEADER_BYTES:
+                raise MalformedMultipartError("cabeceras de parte demasiado grandes")
             return False
         start, separator = min(ends)
+        if start > _MAX_PART_HEADER_BYTES:
+            raise MalformedMultipartError("cabeceras de parte demasiado grandes")
         name = _part_name(bytes(self._buf[:start]))
         del self._buf[: start + separator]
         self._state = _FILE if name == "file" else _SKIP
