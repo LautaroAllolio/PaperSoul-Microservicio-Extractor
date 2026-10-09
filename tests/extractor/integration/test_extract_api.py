@@ -74,6 +74,26 @@ def multipart(
     return head + content + tail, f"multipart/form-data; boundary={boundary}"
 
 
+def orchestrator_multipart(
+    content: bytes,
+    *,
+    checksum: str = "a" * 64,
+    filename: str = "doc.pdf",
+    boundary: str = BOUNDARY,
+) -> tuple[bytes, str]:
+    """Build the exact multipart the orquestador emits: ``checksum`` field first."""
+    checksum_part = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="checksum"\r\n\r\n{checksum}\r\n'
+    ).encode("latin-1")
+    file_part = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode("latin-1")
+    tail = f"\r\n--{boundary}--\r\n".encode("latin-1")
+    return checksum_part + file_part + content + tail, f"multipart/form-data; boundary={boundary}"
+
+
 async def _app_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -86,7 +106,7 @@ async def test_extract_returns_the_exact_contract_body(client, valid_pdf: bytes)
     body, content_type = multipart(valid_pdf)
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 200
@@ -97,11 +117,36 @@ async def test_extract_returns_the_exact_contract_body(client, valid_pdf: bytes)
     assert "Hello PaperSoul" in payload["extracted_text"]
 
 
+async def test_extract_honours_the_orchestrator_multipart_and_headers(
+    client, valid_pdf: bytes
+) -> None:
+    checksum = "9" * 64
+    correlation_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    body, content_type = orchestrator_multipart(valid_pdf, checksum=checksum)
+
+    response = await client.post(
+        "/api/v1/extractions",
+        content=body,
+        headers={
+            "Content-Type": content_type,
+            "X-Document-Checksum": checksum,
+            "X-Correlation-Id": correlation_id,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"extracted_text", "extraction_method", "page_count"}
+    assert payload["page_count"] == 2
+    assert response.headers.get("x-correlation-id") == correlation_id
+    assert response.headers.get("x-request-id") is None
+
+
 async def test_extract_rejects_a_body_without_the_file_field(client, valid_pdf: bytes) -> None:
     body, content_type = multipart(valid_pdf, field="payload")
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -112,7 +157,7 @@ async def test_extract_rejects_an_empty_file_part(client) -> None:
     body, content_type = multipart(b"")
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -123,7 +168,7 @@ async def test_extract_maps_a_corrupt_document_to_unreadable(client) -> None:
     body, content_type = multipart(b"not a pdf at all")
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -134,7 +179,7 @@ async def test_extract_maps_an_encrypted_document(client, encrypted_pdf: bytes) 
     body, content_type = multipart(encrypted_pdf)
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -145,7 +190,7 @@ async def test_extract_rejects_text_below_the_minimum(client, short_text_pdf: by
     body, content_type = multipart(short_text_pdf)
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -156,7 +201,7 @@ async def test_extract_rejects_a_document_without_any_text(client, blank_pdf: by
     body, content_type = multipart(blank_pdf)
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 422
@@ -168,7 +213,7 @@ async def test_extract_aborts_when_the_upload_exceeds_the_limit(valid_pdf: bytes
     body, content_type = multipart(valid_pdf)
     async for client in _app_client(app):
         response = await client.post(
-            "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+            "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
 
     assert response.status_code == 413
@@ -180,7 +225,7 @@ async def test_extract_requires_a_boundary_in_the_content_type(valid_pdf: bytes)
     body, _ = multipart(valid_pdf)
     async for client in _app_client(app):
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/extractions",
             content=body,
             headers={"Content-Type": "multipart/form-data"},
         )
@@ -201,7 +246,7 @@ async def test_extract_never_invokes_the_starlette_form_parser(
     body, content_type = multipart(valid_pdf)
 
     response = await client.post(
-        "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+        "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
     )
 
     assert response.status_code == 200
@@ -253,9 +298,13 @@ async def test_the_request_id_dependency_echoes_the_header_or_generates_one() ->
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         forwarded = await client.get("/_request_id", headers={"X-Request-Id": "abc-123"})
+        correlated = await client.get(
+            "/_request_id", headers={"X-Correlation-Id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"}
+        )
         generated = await client.get("/_request_id")
 
     assert forwarded.json() == {"request_id": "abc-123"}
+    assert correlated.json() == {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"}
     assert len(generated.json()["request_id"]) == 32
 
 

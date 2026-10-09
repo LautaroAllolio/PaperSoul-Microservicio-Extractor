@@ -20,11 +20,17 @@ def get_extraction_service(request: Request) -> ExtractionService:
 def get_request_id(request: Request) -> str:
     """Return the correlation id this request already carries, or mint one.
 
-    The request-id middleware owns minting and echoing; when it has not run
-    (unit usage, direct calls) the header is honoured and the id recorded here.
+    ``X-Correlation-Id`` is the header the orchestrator forwards; ``X-Request-Id``
+    remains the fallback. The request-id middleware owns minting and echoing;
+    when it has not run (unit usage, direct calls) the header is honoured and
+    the id recorded here.
     """
     request_id = getattr(request.state, "request_id", None)
     if not request_id:
-        request_id = request.headers.get("X-Request-Id") or uuid4().hex
+        request_id = (
+            request.headers.get("X-Correlation-Id")
+            or request.headers.get("X-Request-Id")
+            or uuid4().hex
+        )
         request.state.request_id = request_id
     return request_id
