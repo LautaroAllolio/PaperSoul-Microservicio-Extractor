@@ -1,0 +1,6 @@
+GET http://localhost:9000/health
+GET http://localhost:9000/ready
+GET http://localhost:9000/metrics
+POST http://localhost:9000/api/v1/extractions
+POST http://localhost:9000/api/v1/extractions
+POST http://localhost:9000/api/v1/extractions
