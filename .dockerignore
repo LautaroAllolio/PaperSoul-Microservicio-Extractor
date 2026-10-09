@@ -1,0 +1,14 @@
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+tests/
+docs/
+graphify-out/
+load-tests/
+.github/
+.git/
+.gitignore
+Dockerfile
+.env
+.env.example
