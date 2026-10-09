@@ -372,6 +372,35 @@ sesión. No se realizó soak largo ni muestreo de RSS en vivo. Los cuerpos
 (sin permiso de escritura fuera del home, por lo que no se generó el
 `--summary-export` JSON; el reporte textual es equivalente).
 
+## 9. Cambios de comportamiento posteriores a esta corrida (TASK-12..24)
+
+La suite de robustez (método `docs/tasks/todo.md`, Fases A–C) cambió varios
+comportamientos que **invalidan o matizan** las cifras de § 3: los thresholds
+de latencia/bytes y las historias abiertas de § 5/§ 6 deben re-medirse. Los
+veredictos de esta corrida describen el binario **antes** de estas tareas; el
+detalle de cada una (con sus tests) está en `docs/tasks/todo.md`.
+
+| Cambio | Dónde | Impacto esperado sobre las medidas |
+|---|---|---|
+| Fast-fail `503`/`413` **antes de leer el cuerpo** (backstop de tamaño + puerta) | `extract.py`, `middlewares.py` (TASK-12) | Cierra la historia abierta de § 5 (T9/T10): en el régimen de bytes el `503` aparece sin consumir el upload; cambia coste de bytes por request fallido |
+| **Timeout único en el pool**; la ruta ya no envuelve en `asyncio.wait_for`; el buffer se libera al terminar la extracción | `pool.py`, `extract.py` (TASK-13) | p99 de saturación (T7) debería acotarse mejor; elimina la doble espera |
+| `_Gate` sobre `BoundedSemaphore` (ceiling autoritario) | `pool.py` (TASK-14) | `inflight` nunca excede `MAX_CONCURRENT`; medición de rodilla más precisa |
+| Tope de cabeceras de parte multipart (16 KiB) | `multipart_reader.py` (TASK-15) | 422 acotado ante streams infinitos de cabeceras (antes: crecimiento sin cota) |
+| Log de excepciones no esperadas (traceback estructurado) + stdout por defecto | `handlers.py`, `logging_.py` (TASK-16) | 500 pasa a ser diagnosticable; sin impacto en p95 |
+| `Settings` con validadores + entrypoint `python -m pdfextractor` | `settings.py`, `__main__.py` (TASK-17) | Config inválida falla al arrancar, no en runtime |
+| Dialecto de error 404/405/422 con una sola clave `{"error"}` | `handlers.py` (TASK-18) | Contrato de errores homogéneo |
+| Pool en **`forkserver`** (no `fork`) | `pool.py` (TASK-19) | **Riesgo en el p99 serán más altos**: arranque de workers ~0,6 s (idle) a ~12 s (bajo carga) en este host; la suite re-jala con pools tibios en tests; re-medir cola/rodilla |
+| **Cotas de salida** `MAX_PAGES` / `MAX_EXTRACTED_CHARS` → `422` | `errors.py`, `extraction_service.py`, `settings.py` (TASK-20) | Bombas de descompresión se cortan con 422 acotado (nunca OOM); nuevas filas de error |
+| Métricas de proceso/GC + render `/metrics` en threadpool | `metrics.py` (TASK-21) | `/metrics` ya no bloquea el event loop; series nuevas `process_cpu_*`, `python_gc_*` |
+| Gates de CI (memory, `pip-audit`, build imagen) | `.github/workflows/ci.yml` (TASK-23) | Calidad reproducible en CI |
+
+**Estado de verificación:** suite completa **143 passed / 2 skipped** +
+`-m memory` **2 passed** tras TASK-12..24; `ruff check`, `ruff format --check` y
+`mypy` verdes. La **nueva corrida de carga sobre `:9000`** (re-ejecutar § 7) y la
+**revisión humana** de TASK-12..24 quedan como paso pendiente del CP-5;
+previsto además que los números de rodilla/baseline se movilicen levemente por
+el cambio de start method del pool.
+
 ## 8. Referencias
 
 - `docs/tasks/plan.md` — alcance, ruta `POST /api/v1/extractions` (AD6) y

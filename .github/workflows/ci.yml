@@ -37,3 +37,12 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+      - name: Test memory ceiling (RSS)
+        run: uv run pytest -m memory -q
+
+      - name: Vulnerabilities (pip-audit)
+        run: uv run --with pip-audit pip-audit
+
+      - name: Build Docker image
+        run: docker build -t pdfextractor:ci .

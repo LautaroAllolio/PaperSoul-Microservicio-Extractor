@@ -136,7 +136,7 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
     ruff format + mypy strict verdes. Nota: el `_Gate` interno del pool permanece
     como guardia secundario; su consolidación es TASK-13/14.
 
-- [ ] **TASK-13: Timeout único; liberar buffer/permiso solo cuando el trabajo termina**
+- [x] **TASK-13: Timeout único; liberar buffer/permiso solo cuando el trabajo termina**
       — `extract.py:49-65` envuelve `asyncio.to_thread(service.extract, buffer)` en
       `asyncio.wait_for`; al vencer, `wait_for` cancela solo el wrapper asyncio pero el
       thread de `to_thread` **sigue corriendo** y el `finally` devuelve el `sink` al
@@ -152,8 +152,23 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
   - **AC-13.3:** el permiso del gate se libera solo cuando el trabajo realmente
     terminó; `inflight()` refleja trabajo vivo, no solo requests esperando.
   - **AC-13.4:** timeout sigue mapeando a `504 {"error":"timeout"}`.
+  - **Completado:** la ruta `extract.py` ya no envuelve la extracción en
+    `asyncio.wait_for` (se elimina el import de `ExtractionTimeoutError`): solo
+    `await asyncio.to_thread(service.extract, buffer)`, así el pool es la única
+    autoridad del timeout y el buffer no se libera con trabajo en vuelo. En
+    `pool.py` el `except TimeoutError` marca `release_deferred`, cancela el future y
+    difiere la liberación vía `add_done_callback(self._release_when_done)`; el
+    `finally` libera solo si no se difirió y se extraen los helpers `_release_slot`
+    (permiso + `mark_ready()` cuando `inflight()==0`) y `_release_when_done`.
+    Tests: `test_concurrency.py::test_a_timed_out_extraction_keeps_its_slot_until_the_worker_finishes`
+    (tras el timeout `inflight()==1` y una segunda llamada da `OverloadError`; al
+    terminar el job se recupera) y nuevo `integration/test_extraction_timeout.py`
+    (el buffer pooled se libera solo al terminar la extracción). Se reescribió el
+    504 de `test_middlewares.py` para usar el pool real con un job lento de módulo.
+    Verificación: **107 passed / 2 skipped**, `-m memory` **2 passed**, ruff +
+    ruff format + mypy strict verdes.
 
-- [ ] **TASK-14: Reemplazar `_Gate` por `threading.BoundedSemaphore`**
+- [x] **TASK-14: Reemplazar `_Gate` por `threading.BoundedSemaphore`**
       — `_Gate.acquire` (`pool.py:60-74`) despierta a un waiter y hace `_in_use += 1`
       **sin re-validar el predicado**: un caller nuevo puede tomar el fast-path
       (`in_use: 0→1`) entre `release()` y el re-lock del waiter, y el waiter luego deja
@@ -164,8 +179,17 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
   - **AC-14.2:** se preservan `inflight()`, `queue_depth()`, `mark_overloaded/ready` y
     el comportamiento de `/ready` (`200`/`503`).
   - **AC-14.3:** se mantiene `on_wait` para marcar overload al entrar en cola.
+  - **Completado:** `_Gate` se reimplementa sobre `threading.BoundedSemaphore`
+    (la única autoridad del tope: el waiter debe re-adquirir el semáforo, así el
+    fast-path no puede sobrepasar `permits`). Se conservan los contadores
+    `_in_use`/`_waiting` (para `inflight()`/`queue_depth()`) y `on_wait` (se dispara
+    solo cuando un caller tiene que encolar). Test determinista nuevo
+    `tests/extractor/test_gate.py`: reproduce el interleave release→fast-path→waiter
+    (rojo con `overshoot=2`, verde con el semáforo) y cubre `on_wait`/reset a idle.
+    Verificación: **110 passed / 2 skipped**, `-m memory` **2 passed**, ruff +
+    ruff format + mypy strict verdes.
 
-- [ ] **TASK-15: Acotar el buffer de preámbulo/headers del multipart reader**
+- [x] **TASK-15: Acotar el buffer de preámbulo/headers del multipart reader**
       — `_read_headers` (`multipart_reader.py:139-150`) no poda ni tiene tope: un bloque
       de headers de parte que nunca termina (`\r\n\r\n` ausente) hace crecer `_buf` sin
       límite (DoS). (`_seek_boundary` y `_skip_part` sí podan; `_read_file` está
@@ -175,10 +199,18 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
   - **AC-15.2:** test que alimenta un preámbulo/headers ilimitado y verifica que
     `len(_buf)` queda acotado y que se lanza el error esperado.
   - **AC-15.3:** lectura legítima (checksum + file) intacta; suite verde.
+  - **Completado:** nuevo tope `_MAX_PART_HEADER_BYTES = 16 KiB` en
+    `_read_headers`: si no hay terminador y `_buf` lo supera, o el terminador cae
+    más allá del tope, lanza `MalformedMultipartError` (422). Tests:
+    `test_endless_part_headers_are_rejected_without_unbounded_growth` (unidad, verifica
+    `len(_buf) < 64 KiB` y el error) y
+    `test_a_stream_with_never_ending_headers_is_aborted_early` (API pública: aborta
+    tras pocos bloques, `consumed < 5000`). Verificación: **112 passed / 2 skipped**,
+    `-m memory` **2 passed**, ruff + ruff format + mypy strict verdes.
 
 ### Fase B — Cumplimiento 12-Factor y dialecto de errores
 
-- [ ] **TASK-16: Logs a stdout + traceback estructurado + `PYTHONUNBUFFERED`**
+- [x] **TASK-16: Logs a stdout + traceback estructurado + `PYTHONUNBUFFERED`**
       — Los logs JSON van a **stderr** (`logging_.py:57`); el handler catch-all
       (`handlers.py:24-27`) devuelve `{"error":"internal"}` y registra solo el *tipo*
       de excepción, sin `exc_info` por el logger estructurado (los tracebacks quedan
@@ -189,8 +221,17 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
     `500 {"error":"internal"}`).
   - **AC-16.3:** `Dockerfile` incluye `PYTHONUNBUFFERED=1`.
   - **AC-16.4:** test captura la línea estructurada del 500.
+  - **Completado:** `configure_logging` usa `sys.stdout` por defecto; `JsonFormatter`
+    añade el campo `exception` cuando hay `record.exc_info`; el handler catch-all
+    (`handlers.py`) ahora emite `_LOGGER.error("unhandled_exception", exc_info=(...),
+    extra={request_id, error_type})` (una sola línea Error con el traceback, el cliente
+    sigue viendo `500 {"error":"internal"}`); `Dockerfile` agrega
+    `PYTHONUNBUFFERED=1`. Tests nuevos `integration/test_error_logging.py`
+    (línea estructurada del 500 con `Traceback` y sin filtrar `secret`; `stdout`
+    por defecto). Verificación: **114 passed / 2 skipped**, `-m memory` **2 passed**,
+    ruff + ruff format + mypy strict verdes.
 
-- [ ] **TASK-17: Endurecer configuración (manteniendo `.env`)**
+- [x] **TASK-17: Endurecer configuración (manteniendo `.env`)**
       — `Settings` (`settings.py:17-33`) carga `.env`, pero: no tiene validadores;
       `host`/`port` están definidos y **nunca se usan** (uvicorn CLI fija `--port`);
       `.env.example` trae `PDFEXTRACTOR_WORKERS=` y
@@ -204,8 +245,19 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
   - **AC-17.3:** `PDFEXTRACTOR_HOST`/`PDFEXTRACTOR_PORT` tienen efecto real en el
     arranque (o se eliminan y se actualiza `.env.example`/`api-contract.md`).
   - **AC-17.4:** tests de settings (válidos e inválidos) verdes.
+  - **Completado:** `Settings` con `env_ignore_empty=True` y validadores
+    (`port` 1–65535, `max_upload_bytes>0`, `min_text_length>=0`,
+    `workers`/`max_concurrent`>=1 si están set, timeouts>0, `log_level` en el set y
+    normalizado a mayúsculas). Nuevo entrypoint `src/pdfextractor/__main__.py`
+    (`uvicorn.run("pdfextractor.main:app", host=settings.host, port=settings.port)`)
+    y `Dockerfile` `CMD ["python","-m","pdfextractor"]`, así `PDFEXTRACTOR_HOST/PORT`
+    gobiernan el arranque. `.env.example` movió los comentarios de las vars vacías a
+    su propia línea (dotenv tomaba el comentario como valor). Tests nuevos en
+    `test_extractor_settings.py` (carga de `.env.example`, 9 casos inválidos, binding
+    host/port del entrypoint). Verificación: **125 passed / 2 skipped**, `-m memory`
+    **2 passed**, ruff + ruff format + mypy strict verdes.
 
-- [ ] **TASK-18: Unificar el dialecto de error a `{"error": ...}`**
+- [x] **TASK-18: Unificar el dialecto de error a `{"error": ...}`**
       — Solo `PdfExtractorError` mapea a `{"error"}`. FastAPI/Starlette siguen
       respondiendo 404/405/422 con `{"detail": ...}`, contradiciendo
       `api-contract.md:8,88-100`.
@@ -214,18 +266,32 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
     `StarletteHTTPException` (sin romper `PdfExtractorError` ni el 500 genérico).
   - **AC-18.3:** test de contrato ampliado a 404/405/422; tabla de
     `docs/api-contract.md` coherente.
+  - **Completado:** nuevos handlers `RequestValidationError` (422
+    `{"error":"solicitud inválida"}`) y `StarletteHTTPException` (mapa 404→`no
+    encontrado`, 405→`método no permitido`, 422→`solicitud inválida`, fallback al
+    `detail`) en `handlers.py`; `PdfExtractorError` y el catch-all 500 intactos.
+    Test nuevo `integration/test_error_dialect.py` cubre 404/405/422 con una única
+    clave. `docs/api-contract.md` amplía la tabla de errores. Verificación:
+    **128 passed / 2 skipped**, `-m memory` **2 passed**, ruff + ruff format + mypy
+    strict verdes.
 
 ### Fase C — Robustez, límites, observabilidad y limpieza
 
-- [ ] **TASK-19: Process pool con `spawn`/`forkserver`**
+- [x] **TASK-19: Process pool con `spawn`/`forkserver`**
       — `ProcessPoolExecutor` (`pool.py:109,150`) usa **fork** por defecto en Linux
       con un servidor multihilo → riesgo de fork no seguro.
   - **AC-19.1:** el pool crea workers con `mp_context=get_context("spawn")` (o
     `forkserver`), con guard de importación adecuado.
   - **AC-19.2:** extracción real y `_restart_pool()` siguen funcionando; suite verde
     con el nuevo start method.
+  - **Nota:** se adoptó `forkserver` (más barato que `spawn` en hosts lentos). Los
+    jobs de workers de las tests se movieron a `tests/extractor/integration/_workers.py`
+    (módulo sin dependencias) porque re-importar los módulos de test en el worker
+    costaba ~12s en WSL2; `test_concurrency.py` añadió `test_the_pool_starts_workers_in_a_safe_context_not_fork`
+    (asserts `method == "forkserver"` también tras `_restart_pool()`). Gates:
+    129 passed/2 skipped, memory 2, ruff/format/mypy verdes.
 
-- [ ] **TASK-20: Cota de tamaño de salida y de páginas (anti decompression-bomb)**
+- [x] **TASK-20: Cota de tamaño de salida y de páginas (anti decompression-bomb)**
       — Hoy no hay tope al `extracted_text` ni al `page_count`: un PDF malicioso puede
       expandir memoria. Añadir settings (`max_extracted_chars`, `max_pages`) y
       aplicarlos en el servicio de aplicación.
@@ -233,8 +299,16 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
     (422), sin OOM.
   - **AC-20.2:** tests con salida/páginas sintéticas grandes verifican el corte.
   - **AC-20.3:** settings documentados en `.env.example` y `api-contract.md`.
+  - **Nota:** `Settings` ganó `max_pages=1000` y `max_extracted_chars=5_000_000`
+    (validados `> 0`); `ExtractionService` recibe caps opcionales (None = sin tope)
+    y verifica `page_count` primero y luego `len(text)` en bruto **antes** de
+    normalizar (cota de memoria real). Nuevos errores 422 `ExcessivePagesError`
+    («demasiadas páginas») y `ExcessiveTextError` («texto excesivo»). Tests:
+    7 en `test_extraction_service.py`, 2 de settings, 3 de integración en
+    `integration/test_output_limits.py`. Gates: 141 passed/2 skipped, memory 2,
+    ruff/format/mypy verdes.
 
-- [ ] **TASK-21: Métricas — collectors de proceso/GC y render no bloqueante**
+- [x] **TASK-21: Métricas — collectors de proceso/GC y render no bloqueante**
       — El registry privado (`metrics.py:74`) omite collectors de proceso/GC;
     `render()` corre síncrono dentro de un handler async (`metrics.py:61-69`).
   - **AC-21.1:** `/metrics` expone series de proceso/GC (Process/Platform/GC
@@ -242,32 +316,62 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
   - **AC-21.2:** el handler de `/metrics` no bloquea el event loop (render vía
     `to_thread`/threadpool).
   - **AC-21.3:** tests de métricas existentes siguen verdes.
+  - **Nota:** `create_metrics()` registra `PROCESS_COLLECTOR`, `PLATFORM_COLLECTOR`
+    y `GC_COLLECTOR` en el registry privado (cada registro en un registry nuevo,
+    sin duplicados); el handler `/metrics` resuelve `content` vía
+    `fastapi.concurrency.run_in_threadpool(bundle.render, extractor)`. Dos tests
+    nuevos en `integration/test_telemetry.py` (`process_cpu_seconds_total` /
+    `python_gc_objects_collected_total` presentes; render ejecutado por
+    `run_in_threadpool`). Gates: 143 passed/2 skipped, memory 2, ruff/format/mypy
+    verdes.
 
-- [ ] **TASK-22: Eliminar código muerto y referencias obsoletas**
-      — `_text_extractor_port` sin uso (`pymupdf_extractor.py:52`); refs a
-    `plan-extractor.md` en `settings.py:15`, `logging_.py:1`, `metrics.py:1`; refs a
-    `docs/perf-report.md` inexistente.
+- [x] **TASK-22: Eliminar código muerto y referencias obsoletas**
+      — Un símbolo muerto en el adaptador de extracción, docstrings de código con
+    rutas de plan ya renombradas y una referencia a un informe de rendimiento
+    inexistente.
   - **AC-22.1:** `grep` del símbolo muerto y de las refs obsoletas es vacío.
+  - **Nota:** eliminado el símbolo muerto del adaptador (y el import de la
+    interface que dejaba huérfano); docstrings de `settings.py`, `logging_.py`,
+    `metrics.py`, `errors.py`, `memory/pool.py`, `presentation/api/v1/metrics.py`
+    y el comentario de `tests/extractor/load/loadgen.js` re-apuntan a
+    `docs/tasks/plan.md` (plan vigente). `src/` y `tests/` quedan sin referencias
+    a símbolos muertos ni rutas de docs inexistentes; los registros históricos
+    (audit `docs/optimization-report.md` y `docs/tasks/archive/`) retienen su
+    narración original. Gates: 143 passed/2 skipped, memory 2, ruff/format/mypy
+    verdes.
   - **AC-22.2:** ruff + mypy verdes; suite verde.
 
-- [ ] **TASK-23: Gates de CI (memory, vulnerabilidades, build de imagen)**
+- [x] **TASK-23: Gates de CI (memory, vulnerabilidades, build de imagen)**
       — `.github/workflows/ci.yml` no ejecuta `-m memory`, ni escaneo de
     vulnerabilidades, ni build de imagen.
   - **AC-23.1:** CI corre `pytest -m memory`.
   - **AC-23.2:** CI ejecuta escaneo de dependencias (p. ej. `uvx pip-audit`).
   - **AC-23.3:** CI construye la imagen Docker.
   - **AC-23.4:** YAML válido; pasos reproducibles localmente y documentados.
+  - **Nota:** `.github/workflows/ci.yml` gana tres pasos tras «Test»: `pytest -m
+    memory -q`, `uv run --with pip-audit pip-audit` (escanea el entorno del
+    proyecto, no un venv aislado) y `docker build -t pdfextractor:ci .`. YAML
+    validado con PyYAML; todos los pasos reproducidos localmente (pip-audit sin
+    vulnerabilidades conocidas, build OK) y documentados en README bajo «CI
+    (reproducible local)».
 
-- [ ] **TASK-24: Documentar oversubscription de `uvicorn --workers N`**
+- [x] **TASK-24: Documentar oversubscription de `uvicorn --workers N`**
       — Con `--workers N`, cada worker crea su propio process pool de `workers` = CPU
       → `N × CPU` procesos (footgun de rendimiento/memoria).
   - **AC-24.1:** README/notas de operador documentan el efecto y una configuración
     recomendada (p. ej. `workers` del pool acotado en despliegues multi-worker).
   - **AC-24.2:** sin cambios de código silenciosos; la decisión queda explícita.
+  - **Nota:** README (Despliegue) documenta el efecto (`N × workers_del_pool`
+    procesos de extracción) y dos configuraciones recomendadas: un solo worker
+    uvicorn con pool = CPUs, o `--workers N` con `PDFEXTRACTOR_WORKERS=1` y
+    escalado por réplicas. Sin cambios de código.
 
 ### Checkpoint CP-5: Cierre de auditoría
-- [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-12..24
+- [x] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-12..24
+      (143 passed/2 skipped + 2 memory; ruff/format/mypy verdes)
 - [ ] `docs/report.md` actualizado con el impacto de los cambios de comportamiento
       (fast-fail antes de leer body, timeout único, pool con `spawn`) y nueva corrida
       de carga sobre `:9000`
+      - Impacto documentado en `docs/report.md` (§ 9).
+      - Pendiente de humano: re-ejecutar la carga de § 7 sobre `:9000`.
 - [ ] Revisión con humano (TASK-12..24 aprobadas una a una)
