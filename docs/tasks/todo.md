@@ -369,9 +369,13 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
 ### Checkpoint CP-5: Cierre de auditoría
 - [x] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-12..24
       (143 passed/2 skipped + 2 memory; ruff/format/mypy verdes)
-- [ ] `docs/report.md` actualizado con el impacto de los cambios de comportamiento
-      (fast-fail antes de leer body, timeout único, pool con `spawn`) y nueva corrida
-      de carga sobre `:9000`
-      - Impacto documentado en `docs/report.md` (§ 9).
-      - Pendiente de humano: re-ejecutar la carga de § 7 sobre `:9000`.
+- [x] `docs/report.md` actualizado con el impacto de los cambios de comportamiento
+      (fast-fail antes de leer body, timeout único, pool con `forkserver`) y nueva
+      corrida de carga sobre `:9000`
+      - Reporte § 3–§ 6 re-escritos con las cifras de la corrida nueva; § 9
+        documenta el delta TASK-12..24.
+      - Corrida re-ejecutada: k6 (baseline/stress/sonda) + Vegeta A (400 rps
+        mixto) + Vegeta B (150 rps 20 pág., servidor reiniciado). Artefactos en
+        `load-tests/run-9000/` (`k6-output.txt`, `server.log`, `server-b.log`,
+        `results-mixed.*`, `results-20p.*`).
 - [ ] Revisión con humano (TASK-12..24 aprobadas una a una)

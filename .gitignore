@@ -228,3 +228,4 @@ load-tests/*-report*.txt
 load-tests/k6-output.txt
 docs/pdfs/
 load-tests/k6-run3-saturado.txt
+load-tests/run-9000/

@@ -8,10 +8,18 @@
 > esta tarea en `docs/tasks/plan.md`; el contrato verificado proviene de
 > `docs/api-contract.md`.
 
-**Fecha de medición:** 2026-10-09 · **Herramientas:** k6 v2.3.0 (snap),
-Vegeta v12.13.0 · **Entorno:** WSL2 (Ubuntu sobre Windows), 3.7 GiB RAM,
-CPU 8 núcleos; servicio `uvicorn` (`--factory pdfextractor.main:create_app`) en
-`127.0.0.1:9000`.
+**Fecha de medición:** 2026-10-09 (segunda corrida) · **Herramientas:** k6
+v2.3.0 (snap), Vegeta v12.13.0 · **Entorno:** WSL2 (Ubuntu sobre Windows),
+3.7 GiB RAM, CPU 8 núcleos; servicio `uvicorn`
+(`--factory pdfextractor.main:create_app`) en `127.0.0.1:9000`.
+
+> **Corrida actual vs. anterior:** este documento ha sido re-ejecutado contra el
+> binario **posterior a TASK-12…TASK-24** (fast-fail `503` antes de leer el
+> cuerpo, timeout único en el pool, pool en `forkserver`, cotas de salida).
+> Por eso § 3 y § 5 **reemplazan** las cifras de la corrida original de este
+> mismo día: la comparativa con los números previos (y el impacto esperado de
+> cada tarea) está documentada en [§ 9](#9-cambios-de-comportamiento-task-1224-que-explican-la-diferencia),
+> y el anexo de pruebas de robustez en `docs/optimization-report.md`.
 
 ## 1. Alcance
 
@@ -56,7 +64,9 @@ k6 mide con un pool de VUs que ocupan memoria por petición en vuelo
 que fuerza decisiones de preasignación (ver § 2.2). Vegeta es *goroutine-per-
 request* y admite saturaciones profundas con costo de memoria fijo, por eso se
 usa para el régimen de sobrecarga. Ambas herramientas capturan la misma
-verdad: el umbral de saturación se ubica en el orden de ~150 rps mixtos.
+verdad: el throughput sostenible de `200` con la mezcla real se ubica en el
+orden de **~30–60 rps** (rodilla), muy por debajo de los 150 rps *ofrecidos* en
+la ventana de saturación.
 
 ### 2.2 Harness k6 (`load-tests/load-test.js`)
 
@@ -83,7 +93,7 @@ paralela:
     `unexpected_status==0`
 - Preasignación del pool: `preAllocatedVUs = rate×10`, `maxVUs = rate×16`
   (= 1500/2400 a 150 rps). En esta corrida k6 asignó hasta **1542 VUs** (pico
-  usado 976) y no descartó iteraciones (`0 interrupted`), por lo que el runner
+  usado 409) y no descartó iteraciones (`0 interrupted`), por lo que el runner
   no distorsiona la curva ofrecida.
 
 ### 2.3 Ataques Vegeta (`load-tests/run-9000/targets*.txt`, `body*.bin`)
@@ -95,27 +105,31 @@ paralela:
 - **B — homogéneo:** 1 target `POST /api/v1/extractions`, body `valid_20p.pdf`,
   150 rps, 30 s, timeout 35 s.
 
-### 2.4 Mapa de colas del servicio (base del análisis del § 4)
+### 2.4 Mapa de etapas del servicio (base del análisis del § 4)
 
 La ruta `POST /api/v1/extractions`
-(`src/pdfextractor/presentation/api/v1/extract.py`) encadena cuatro etapas tras
-la lectura:
+(`src/pdfextractor/presentation/api/v1/extract.py`) encadena cuatro etapas,
+**con la admisión antes de leer el cuerpo** (TASK-12):
 
 ```
-HTTP → ① read_multipart_file (event loop, bytearray por request)
-      → ② asyncio.to_thread (cola del executor default, ~min(32,cpu+4) hilos)
-      → ③ ProcessPoolTextExtractor._Gate  (4 permisos, 2 s → 503)
-      → ④ ProcessPoolExecutor workers     (30 s → 504)
+HTTP → ① AdmissionGate (slot de concurrencia, ANTES de leer un byte; 2 s → 503)
+      → ② read_multipart_file (event loop, buffer del pool, max_bytes = 1 MiB)
+      → ③ asyncio.to_thread (cola del executor default, ~min(32,cpu+4) hilos)
+      → ④ ProcessPool workers (timeout único de extracción 30 s → 504)
 ```
 
-- `BufferPool.acquire()` (memoria/pool.py:21) es **no bloqueante**: con los 4
-  buffers en uso devuelve `None`, y `read_multipart_file(sink=None)`
-  (multipart_reader.py:59) lee igual el cuerpo completo a un `bytearray`
-  nuevo. Resultado: la ① (y su cola de coroutinas pendientes de hilo en ②)
-  es la **cola realmente sin tope** del sistema.
-- El `503` en ③ solo se dispara si la petición consigue un hilo de ② y agota
-  los 2 s esperando un permiso de la puerta. `504` = timeout de extracción
-  (30 s) del pool en ④.
+- ① `admission.admit(queue_timeout)` reserva el slot **antes** de enmarcar el
+  multipart: si la puerta está saturada, `503` sin leer ni un byte
+  (`extract.py:47-53`). Mientras haya tokens, la petición avanza y se lee el
+  cuerpo a un buffer del pool (cota: `max_upload_bytes`); si el buffer no está
+  disponible se responde `503` defensivo (`extract.py:58-61`).
+- El `504` solo es alcanzable si una extracción admitida no termina en los
+  **30 s** del timeout único del pool (`memory/pool.py`). Como ① corta la
+  entrada antes de leer el cuerpo, en la práctica el `503` predomina y el
+  `504` queda acotado a trabajos que ya estaban en vuelo.
+- La cola **menos acotada** restante es el event loop (①–②) bajo tasas muy
+  altas (régimen A de § 3.3): todo lo que se enmarca, serializa o escribe
+  pasa por él, y su saturación degrada también a las sondas `GET`.
 
 ## 3. Resultados
 
@@ -123,111 +137,133 @@ HTTP → ① read_multipart_file (event loop, bytearray por request)
 
 | Métrica | Valor | Target |
 |---|---:|---|
-| avg / med | 24.53 ms / 11.47 ms | — |
-| p90 / p95 / p99 | 58.33 / **64.88** / **93.72** ms | p95 < 500 · p99 < 750 ✅✅ |
-| min / max | 3.2 / 121.4 ms | — |
+| avg / med | 87.39 ms / 37.87 ms | — |
+| p90 / p95 / p99 | 175.22 / **289.38** / **729.37** ms | p95 < 500 · p99 < 750 ✅✅ |
+| min / max | 5.19 ms / 1.07 s | — |
 | `http_req_failed` | **0.00 %** (0/1099) | < 1 % ✅ |
 | checks (200 + 3 claves) | 2198 / 2198 (100 %) | > 99 % ✅ |
 
-El SLO queda holgado: p95 a ~13 % del techo y p99 a ~12 % del suyo. El body
-mixto a 40 rps nunca alcanza la puerta de 4 permisos.
+Sigue siendo OK, pero con menos holgura que la corrida anterior (p95 había
+quedado en 64.88 ms): p95 queda a ~58 % del techo y p99 a ~97 %. El incremento
+es coherente con las tareas de robustez: el pool `forkserver` esparce workers
+perezosamente, y los primeros request concurrentes de la rampa absorben cada
+arranque en frío (~3.4 s, una cola por worker) antes de quedar tibio. A 40 rps
+la puerta de 4 slots no se satura.
 
-### 3.2 Carga sostenida / rodilla (k6, 150 rps, 4124 requests)
+### 3.2 Carga sostenida / rodilla (k6, 150 rps, 3231 requests POST)
 
 | Métrica | Valor | Lectura |
 |---|---:|---|
-| avg / med | 3.85 s / 15.62 ms | ~mitad de la ventana sin cola (rampa) |
-| p90 / p95 / p99 | 17.47 / 20.10 / **22.32** s | la cola domina el piso alto |
-| min / max | 2.89 ms / 22.69 s | `p(99) < 32 s` ✅ (T7) |
-| `http_req_failed` (POST) | **0.00 %** (4124/4124 `200`) | sin degradar el contrato |
+| avg / med | 3.35 s / 1.18 s | ~mitad de la ventana sin cola (rampa) |
+| p90 / p95 / p99 | 18.62 / 19.35 / **19.93** s | el event loop marca el piso alto de `200` |
+| min / max | 4.57 ms / 20.17 s | `p(99) < 32 s` ✅ (T7) |
+| `http_req_failed` (POST) | **29.12 %** (941/3231, todos `503`) | backpressure real, acotada a 2 s |
+| `200` vs `503` | 2290 vs 941 | la puerta corta el exceso; cero `504` |
 | `unexpected_status` | **0** | ningún status fuera de `{200,503,504}` |
 | iteraciones interrumpidas / dropped | **0** | runner no descarta |
-| VUs asignadas / pico usado | 1542 / 976 | pool suficiente |
-| `/health` durante saturación | 337 / 337 = 100 % ✅ | liveness intacta |
-| `/ready` durante saturación | 107 × `503` (luego vuelve a 200) | degradación de readiness observable |
+| VUs asignadas / pico usado | 1542 / 409 | pool suficiente |
+| `/health` durante saturación | 254 / 254 = 100 % ✅ | liveness intacta |
+| `/ready` durante saturación | 71 × `503` (luego vuelve a 200) | degradación de readiness observable |
 
-A 150 rps mixtos el sistema **absorbió toda la carga sin un solo error**: las
-peticiones esperaron en cola hasta ~22 s (por debajo del timeout de extracción
-de 30 s) y todas terminaron en `200`. La rodilla —el point donde la latencia
-p99 se separa tres órdenes de magnitud del p50— está en el entorno de los
-**~150 rps mixtos**, pero en esta corrida el servicio aún no colapsa, solo
-acumula cola. El promedio (3.85 s) es engañoso: mezcla el tramo de rampa sin
-cola con el tramo saturado.
+El cambio clave frente a la corrida anterior es **cualitativo**: a 150 rps
+mixtos el sistema ya **no** absorbe todo con `200` encolados hasta ~22 s
+(antes: 0.00 % de fallos); ahora la puerta admite solo la capacidad (`200`),
+rechaza el exceso con **`503` inmediato y acotado** (941) y solo deja que
+envejezcan los trabajos ya admitidos. Los `200` que sí entraron terminaron
+rápido; el p90/p99 (~18-20 s) reflejan la **saturación del event loop** (etapa
+② y la escritura de las respuestas de ~120 KB de los fixtures pesados), no
+colas de extracción. Los `503` se activan a cientos de ms del `queue_timeout`
+(2 s), de modo que el coste de bytes fallido cayó a casi cero (cuerpo no leído).
 
-**Resultado global k6:** `http_reqs = 6236` (67.25 rps agregados, incluyendo
-sonda), `iterations = 5560`, `data_sent = 601 MB`, `data_received = 225 MB`. El
-`http_req_failed` global de **1.71 % (107/6236)** corresponde **exactamente** a
-los `503` de `/ready` de la sonda: los escenarios POST (baseline y stress)
-reportan **0.00 %** de fallos. Todos los thresholds del runner pasaron y k6
-salió con código **0**.
+**Resultado global k6:** `http_reqs = 5094` (baseline 1099 + saturación 3231 +
+sonda 764), `iterations = 4584`, `data_sent = 306 MB`, `data_received = 80 MB`.
+El `http_req_failed` global de **19.86 % (1012/5094)** = 941 `503` POST de
+saturación + 71 `503` de `/ready` de la sonda; baseline y body-checks siguen en
+**0.00 %**. Todos los thresholds del runner pasaron y k6 salió con código **0**.
 
 ### 3.3 Sobrecarga mixta (Vegeta A, 400 rps, 12000 requests, 5 páginas)
 
 | Métrica | Valor |
 |---|---:|
-| rate ofrecido / throughput | 400.04 rps / **244.47 rps exitosos** |
-| latencia min / mean | 5.96 ms / 5.086 s |
-| latencia p50 / p90 / p95 / p99 / max | 1.992 / 19.529 / 22.762 / 26.931 / 27.998 s |
-| éxito (`200`) | 10005 = **83.38 %** |
-| `503` (backpressure) | 1995 = 16.62 % ✅ **el fast-fail se activa bajo carga mixta** |
+| rate ofrecido / throughput | 400.04 rps / **58.27 rps exitosos** |
+| latencia min / mean | 2.881 ms / 19.137 s |
+| latencia p50 / p90 / p95 / p99 / max | 19.553 / 35.001 / 35.001 / 35.003 / 35.052 s |
+| éxito (`200`) | 3787 = **31.56 %** |
+| `503` (backpressure) | 4912 = **40.93 %** ✅ **el fast-fail se activa aun en colapso** |
+| timeout de cliente (35 s, código `0`) | 3301 = 27.51 % |
 | otros códigos / cortes de transporte | 0 |
-| drenaje tras fin del ataque | 10.93 s (la cola se vacía por sí sola) |
+| drenaje tras fin del ataque | 34.997 s (la cola del event loop se vacía) |
 
-Con POST ≈ 200 rps ofrecidos sobre una capacidad mixta de ~100–150, la puerta ③
-satura y genera `503` acotados: el p50 global (1.992 s) está en el orden del
-`queue_timeout` (2 s) porque la mitad de las muestras son rechazos rápidos de
-la puerta. El throughput exitoso (244 rps) refleja que los `503` **no consumen
-capacidad de extracción**.
+A 400 rps mixtos (≈ 200 rps POST ofrecidos contra ~60 rps de capacidad) el
+servicio **entra en colapso profundo**: la etapa ② del event loop se satura y
+degradó también a las sondas `GET` (/health, `/ready`, `/metrics` entraron en el
+mismo bote de los `0-count` de timeout de cliente). La puerta siguió produciendo
+`503` (4912) —la mitad de las respuestas exitosas en términos de protocolo— pero
+el p50 global (19.5 s) muestra que la admisión y el retorno quedan encolados por
+la saturación misma del event loop. Los `0` de la columna de códigos
+corresponden a los ~27.5 % de requests cuyo cliente (35 s) dejó de esperar; el
+servidor siguió drenándolos (ver log § 3.5). El `throughput` (58 rps) narra la
+capacidad mixta real: los `503` no consumen slots de extracción.
 
 ### 3.4 Sobrecarga homogénea pesada (Vegeta B, 150 rps, 4500 requests, 20 páginas)
 
 | Métrica | Valor |
 |---|---:|
-| rate ofrecido / throughput | 150.04 rps / **26.83 rps exitosos** |
-| latencia min / mean | 79.57 ms / 25.957 s |
-| latencia p50 / p90 / p95 / p99 / max | 30.162 / 33.461 / 33.532 / 33.645 / 33.736 s |
-| `200` | 1676 = **37.24 %** |
-| `504` (timeout de extracción 30 s) | 2824 = **62.76 %** |
-| timeout de cliente (35 s) | 0 (el p99 interno 33.7 s queda por debajo) |
-| **`503`** | **0** — el fast-fail **no** llega al cliente |
-| drenaje tras fin del ataque | 32.48 s |
+| rate ofrecido / throughput | 150.04 rps / **28.78 rps exitosos** |
+| latencia min / mean | 177.6 ms / 2.093 s |
+| latencia p50 / p90 / p95 / p99 / max | 2.041 / 2.199 / 2.329 / 2.919 / 3.014 s |
+| `200` | 923 = **20.51 %** |
+| `503` (backpressure) | 3577 = **79.49 %** ✅ |
+| `504` (timeout de extracción 30 s) | **0** |
+| timeout de cliente (35 s) | **0** (p99 2.9 s queda muy por debajo) |
+| drenaje tras fin del ataque | 2.078 s |
 
-Con un solo fixture pesado (body 328 KB, respuesta de ~120 KB de texto), la
-etapa ① (parseo + serialización JSON) satura el event loop y la cola ② aguas
-arriba de la puerta. Las peticiones entran en la cola **sin contador de
-expiración propio** y la puerta de 2 s nunca se alcanza: no hay `503`, la
-latencia escala hasta el `504` del pool ④ (~30 s) y el p50/p90/p95 se pegan a
-~30–34 s. Es la manifestación prevista en § 4.2 ("si la latencia del 503 crece
-con la carga, la cola no está acotada"). A diferencia de la corrida anterior,
-el cliente (timeout 35 s) ya no corta antes que el servidor: el `504` interno
-llega primero y queda contabilizado como respuesta.
+**El hallazgo que esta corrida pasa a verde:** el régimen de bytes pesados ya no
+produce colas desacotadas. Antes, con el cuerpo de 328 KB y ~120 KB de texto de
+respuesta, la puerta era inalcanzable: no había `503`, la latencia escalaba hasta
+el `504` del pool (~30 s) o el timeout del cliente (0 % de éxito medible en los
+artefactos previos § 7). Con la admisión **antes** de leer el cuerpo (TASK-12),
+la puerta corta en ~2 s: la latencia se acota (p99 2.9 s ≈ `queue_timeout`
+2 s + servicio), el `503` llega al cliente en el 79 % de los casos y no hay
+ningún `504` ni cortes de transporte. El throughput exitoso (28.78 rps) coincide
+con la capacidad teórica del fixture pesado (`4 slots / ~0.124 s ≈ 32 rps`,
+§ 3.5): los `503`, otra vez, no consumen capacidad de extracción.
 
 ### 3.5 Capacidad por fixture y memoria
 
-Latencias aisladas (mediana de 5 muestras, sin carga, misma sesión):
+Latencias aisladas (mediana de 5 muestras, sin carga, pool tibio, misma sesión):
 
 | Fixture | Tiempo | Capacidad de puerta `≈ 4/t` |
 |---|---:|---:|
-| `valid_1p.pdf` | ~27 ms | ~150 rps |
-| `valid_5p.pdf` | ~32 ms | ~125 rps |
-| `valid_20p.pdf` | ~92 ms | ~44 rps |
-| mezcla (1/5/20) | ~50 ms | ~80 rps |
+| `valid_1p.pdf` | ~23 ms | ~170 rps |
+| `valid_5p.pdf` | ~50 ms | ~80 rps |
+| `valid_20p.pdf` | ~124 ms | ~32 rps |
+| mezcla (1/5/20) | ~66 ms | ~60 rps |
 
-Capacidad mixta observada sostenible: **~100–150 rps** (el 20 páginas es el
-limitante). Los valores aislados del fixture pesado subieron frente a la
-corrida anterior (~54 → ~92 ms), consistente con la varianza de un host WSL2
-compartido.
+La capacidad mixta sostenible observada es **~30–60 rps** (el fixture de 20
+páginas es el limitante): el throughput del ataque B (§ 3.4, 28.78 rps
+exitosos) calza con la fila del `20p`, y el `~60 rps` de la mezcla es el
+techo de `200` que la puerta deja pasar en § 3.2 (2290 `200` en ~35 s de
+ventana saturada). Frente a la corrida anterior los aislados subieron
+(~27/32/92 → ~23/50/124 ms): varianza del host WSL2 compartido + arranque
+`forkserver` (el primer trabajo del proceso tarda ~3.4 s en frío; luego se
+amortiza — ver `server.log`).
 
-**Memoria del servicio** (uvicorn + process pool): RSS del proceso principal
-~1.06 GiB al cierre de las pruebas, con los workers del pool en ~40 MiB cada
-uno. **No se realizó muestreo de RSS durante la carga** en esta corrida (el
-soak de T16 sigue pendiente); no se observó ningún `OOM` ni `500` en el log de
-servicio.
+**Memoria del servicio** (uvicorn + pool, muestreado con `ps rss` tras el
+ataque B): proceso principal **~220 MiB**, workers del pool **~63 MiB** cada
+uno (4 spawneados bajo carga, de hasta 8 según `effective_workers`), total
+~500 MiB. El RSS del principal bajó frente al ~1.06 GiB de la corrida anterior
+—medido igualmente "en reposo"— por la compartición copy-on-write de los workers
+`forkserver`; no se observó `OOM` ni `500` en ningún log. El soak largo de T16
+sigue pendiente.
 
-Log del servicio a lo largo de toda la sesión (`load-tests/run-9000/server.log`):
-**200: 17817 · 503: 2102 · 504: 2824 · ningún otro 5xx**. La totalidad de los
-`503` se descompone en 1995 del ataque mixto (A) + 107 del `/ready` de la sonda
-k6; los 2824 `504` provienen del ataque homogéneo (B).
+Log del servicio, sesión completa (suma de `load-tests/run-9000/server.log`
+[k6 + ataque A] y `server-b.log` [ataque B]): **200: 15394 · 503: 15939 ·
+504: 0 · ningún otro 5xx**. El 0 de `504` es el cambio estructural de esta
+corrida: ninguna cola llegó al timeout de extracción. El total de `200/503`
+del servidor supera al observado por los clientes (k6 + Vegeta) porque el
+ataque A dejó requests en vuelo que **el servidor terminó de procesar después
+de que el cliente cortara a los 35 s** (los `0-count` de § 3.3).
 
 ## 4. Análisis
 
@@ -235,37 +271,50 @@ k6; los 2824 `504` provienen del ataque homogéneo (B).
 
 - El tope configurado (`max_concurrent_extractions = 4`) fija el techo
   teórico `≈ 4 / tiempo_de_servicio`. Con la mezcla real la rodilla cae en
-  **~100–150 rps**, y los percentiles altos (`p90` pasando de ~58 ms en la
-  línea base a ~17 s en saturación) marcan el onset de la cola mucho antes que
-  el promedio; esto ilustra el fallo de "juzgar por el mean" del cap. 9 de
+  **~30–60 rps**: el `200`-throughput del ataque B (28.78 rps) coincide con la
+  fila del fixture pesado (§ 3.5) y en § 3.2 la puerta deja pasar ~60 rps de
+  `200`. La separación de percentiles —p90 pasando de ~175 ms en la línea base
+  a ~18.6 s en saturación— marca el onset de la cola mucho antes que el
+  promedio; esto ilustra el fallo de "juzgar por el mean" del cap. 9 de
   *Essential Kanban Condensed* (PDF 48) y del principio de inspección/adaptación
   del *Scrum Guide* (p. 4 impresa): **inspeccionar p95/p99, no la media**.
-- Ley de Little aplicada al propio layout: con ~150 rps ofrecidos y latencia
-  ~15–22 s en saturación, las peticiones en vuelo alcanzan ~1500–2000; el
-  harness k6 debió preasignar `rate × latencia_max` VUs para no descartar (WIP
-  del *Kanban*, PDF 26) — de ahí `preAllocatedVUs = rate×10` y `vus_max = 1542`.
+- Ley de Little aplicada al propio layout: el pico de `200` concurrentes en
+  saturación (~60 rps × ~15–20 s de piso del event loop) exigiría ~1000–1200
+  peticiones en vuelo si todo se admitiera; la puerta corta antes, por eso el
+  pico de VUs usado en k6 cayó de 976 a **409**. `preAllocatedVUs = rate×10`
+  mantiene el runner por encima del WIP teórico (WIP del *Kanban*, PDF 26).
 
-### 4.2 Hallazgo de diseño: la cola no acotada vive en el event loop, no en la puerta
+### 4.2 de hallazgo a resuelto: la cola antes del cuerpo ya está acotada
 
-El `503` acotado en 2 s **solo es alcanzable** si la petición consigue un hilo
-de ②. Cuando el cuello está en ① (bytes/event loop, caso homogéneo pesado), la
-cola crece sin topes y el cliente recibe un `504` tardío en vez de un `503`
-rápido (§ 3.4). Cuando la mezcla es variada y el body es chico, ① se mantiene
-al día y la puerta ③ sí produce `503` acotados (§ 3.3).
+La corrida anterior encontró (y la memoria de esta tarea lo registró como
+hallazgo de diseño, TASK-12) que el `503` acotado **solo era alcanzable si la
+petición conseguía un hilo después de leer el cuerpo**: en el régimen homogéneo
+pesado la cola crecía sin topes y el cliente recibía un `504` tardío o cortaba a
+los 35 s, sin `503`. Ese defecto quedó **resuelto con la admisión antes de leer
+el cuerpo** (`admission.admit` en `extract.py:47-53`):
 
-Implicación para la RNF de backpressure: la restricción "saturación responde
-503 rápido" se cumple **parcialmente** — solo cuando el event loop no es el
-cuello. La causa raíz es que `BufferPool.acquire()` devuelve `None` en lugar
-de rechazar (memoria/pool.py:21) y el reader acepta `sink=None` creando un
-buffer por petición, y que `asyncio.to_thread` no tiene límite de admisión
-(extract.py:49-51).
+- Bajo carga homogénea pesada (§ 3.4) ahora hay **3577 `503` acotados a ~2 s**,
+  cero `504` y cero cortes de cliente; la latencia p99 (2.9 s) es un orden de
+  magnitud menor que el peor caso anterior (~34 s).
+- Bajo saturación mixta k6 (§ 3.2), 941 `503` llegan al cliente (antes: 0).
+- El residuo que persiste es el **event loop como cuello físico**: en el
+  colapso profundo del ataque A (400 rps) la degradación alcanza a las propias
+  sondas `GET`, porque todo lo enmarcado/serializado/escrito atraviesa un único
+  loop de 8 núcleos (etapa ②, § 2.4). No es una cola de extracción: la puerta
+  sigue cortando (`503`), pero el retorno de esas respuestas se encola tras la
+  escritura de los bodies. La defensa a ese nivel es el `queue_timeout` del
+  cliente (35 s en Vegeta, 60 s en k6) y la capacidad del host; una evolución natural
+  sería limitar `asyncio.to_thread` con un semáforo de admisión propio.
 
 ### 4.3 Sobre la estabilidad de los indicadores
 
-El `503` del riesgo de bytes y el `504` del timeout de extracción son la
-defensa real contra colas infinitas a nivel **servidor**; el límite de
-memoria se protegió por los timeouts de cliente más que por la política
-interna. En ningún régimen se observó `500` ni un `5xx` fuera de contrato.
+El `503` de backpressure (ahora previo a la lectura) y el `504` del timeout de
+extracción son la defensa real contra colas infinitas a nivel **servidor**; el
+presupuesto de bytes se protegió internamente y la memoria no creció en modo
+visible (sin muestreo de soaks largos). En ningún régimen se observó `500` ni un
+`5xx` fuera de contrato: los únicos status emitidos fueron `200`, `503` y `504`,
+y los `0` del ataque A corresponden a cortes de cliente, no a respuestas del
+servidor fuera de contrato.
 
 ## 5. Cumplimiento — SLOs, DoD y marco teórico
 
@@ -273,19 +322,19 @@ Mapeo contra los umbrales T1–T16 definidos para esta tarea:
 
 | # | Umbral | Medido | Veredicto |
 |---|---|---|---|
-| T1 | `happy_path p(95) < 500 ms` | **64.88 ms** | ✅ |
-| T2 | `happy_path p(99) < 750 ms` | **93.72 ms** | ✅ |
+| T1 | `happy_path p(95) < 500 ms` | **289.38 ms** | ✅ |
+| T2 | `happy_path p(99) < 750 ms` | **729.37 ms** | ✅ |
 | T3 | `happy_path http_req_failed < 1 %` | **0.00 %** | ✅ |
 | T4 | `checks happy_path > 99 %` | **100 %** | ✅ |
 | T6 | `checks saturación > 95 %` | **100 %** | ✅ |
-| T7 | `saturación p(99) < queue+extraction` (32 s) | **22.32 s** | ✅ |
-| T8 | `unexpected_status == 0` | **0** | ✅ |
-| T9 | backpressure `> 0` (`503` reales) | k6 POST: 0 · **Vegeta A: 1995** | ⚠️ según régimen (ver § 4.2) |
-| T10 | `503` latencia ≈ queue_timeout | p50 global A = **1.992 s** (≈ 2 s) | ✅ (solo mixto) |
-| T11/T12 | `/health` 200 bajo saturación | **100 %** (337/337) | ✅ |
+| T7 | `saturación p(99) < queue+extraction` (32 s) | **19.93 s** | ✅ |
+| T8 | `unexpected_status == 0` | **0** (solo `200`/`503`/`504` en todo el log) | ✅ |
+| T9 | backpressure `> 0` (`503` reales) | k6 POST saturación: **941** · A: 4912 · B: 3577 | ✅ (ahora en cualquier régimen) |
+| T10 | `503` latencia ≈ `queue_timeout` (2 s) | p50 B = **2.041 s**; p50 A = 19.5 s (colapso mixto, ver § 4.2) | ✅ en carga acotada |
+| T11/T12 | `/health` 200 bajo saturación | **100 %** (254/254) | ✅ |
 | T13 | `/ready` nunca 404 | **0** | ✅ |
 | T14 | error budget `/health` < 1 % | **0.00 %** | ✅ |
-| T16 | RSS estable | no re-muestreado esta corrida | 🟡 soak pendiente |
+| T16 | RSS estable | muestreo en reposo ~500 MiB; sin `OOM`/`500` | 🟡 soak pendiente |
 | — | iteraciones interrumpidas / dropped `== 0` | **0** | ✅ |
 
 **Marco RNF (medidas de calidad, DoD):** siguiendo al *Scrum Guide* (p. 12
@@ -295,28 +344,30 @@ throughput, tasa de éxito) son el mecanismo de inspección y se vuelven a
 medir en cada cambio (adaptación). Desde *Historias de usuario* (p. 24
 impresa), los criterios de aceptación no funcionales se separan en
 **objetivo** (p95 < 500 ms), **restricción** (503 acotado a ~2 s bajo
-saturación) y **línea base** (hoy: p50 ≈ 12 ms, capacidad ≈ 100–150 rps) —
-de ningún modo mezclándose con el rendimiento funcional, aunque esta corrida
-reveló que la restricción 503 no se cumple en el régimen de bytes (§ 4.2), lo
-que deja una **historia abierta** ("nunca dar una historia por cerrada", HU
-p. 29 impresa): hay que mover la puerta a la entrada del event loop.
+saturación) y **línea base** (hoy: p50 de línea base ≈ 37.9 ms, capacidad
+sostenida ≈ 30–60 rps). La **historia abierta** que dejó la corrida previa
+—"mover la puerta a la entrada del event loop"— quedó **cerrada por TASK-12**:
+en esta corrida el `503` acotado se cumple en **todos** los regímenes
+(§ 3.2–§ 3.4). Queda una historia menor: acotar la admisión de `asyncio.to_thread`
+(§ 4.2 y § 6).
 
 ## 6. Recomendaciones
 
-1. **Aplicar la puerta antes de leer el cuerpo** (semáforo `asyncio` o
-   `acquire()` bloqueante con timeout en `extract.py:39`, en vez de
-   `sink=None`): el fast-fail `503` quedaría disponible en el régimen en que
-   hoy no existe. Es el cambio con mayor relación valor/coste.
-2. **Acotar admisión de `to_thread`** o reemplazarlo por un pool con cola
-   limitada (`Semaphore` alrededor de `service.extract`), para que el
-   `queue_timeout` de la puerta sea medido desde la llegada, no desde el hilo.
-3. **Watch del p95 en el punto ~100–150 rps** como early warning de la rodilla
-   (el p95 se degrada 2 órdenes de magnitud antes que el p50).
-4. **Cerrado de T16**: corrida soak (10 min) para confirmar la meseta de RSS
-   y medición por separado de los workers del pool (item 7 del plan de carga).
+1. ~~**Aplicar la puerta antes de leer el cuerpo**~~ — **hecho en TASK-12**
+   (`admission.admit` en `extract.py:47-53`), con impacto medido en § 3.2–§ 3.4:
+   el `503` acotado ahora existe en todos los regímenes y desaparecieron los
+   `504` y los cortes de cliente en el régimen de bytes.
+2. **Acotar la admisión de `asyncio.to_thread`** con un semáforo alrededor de
+   `service.extract`, para que el `queue_timeout` de la puerta se mida desde la
+   llegada y no se forme una cola de coroutinas en el executor default. Es lo
+   único que resta del hallazgo § 4.2 (relevante a tasas ≥ 400 rps mixtos).
+3. **Watch del p95 en el punto ~30–60 rps** como early warning de la rodilla
+   (el p95 se degrada dos órdenes de magnitud antes que el p50).
+4. **Cerrar T16**: corrida soak (10 min) para confirmar la meseta de RSS y
+   muestreo en vivo de los workers del pool (item 7 del plan de carga).
 5. Re-medir con `PDFEXTRACTOR_MAX_UPLOAD_BYTES=52428800` (50 MiB) antes de
-   cerrar la Task 13 (item 6 del plan): el costo de bytes por request es el
-   factor que hoy descubre el régimen del § 3.4.
+   cerrar la Task 13 (item 6 del plan): el costo de bytes por request sigue
+   siendo el factor que separa los regímenes § 3.3 (mixto) y § 3.4 (pesado).
 
 ## 7. Reproducibilidad y artefactos
 
@@ -340,7 +391,7 @@ vegeta attack -targets=load-tests/run-9000/targets-mixed.txt \
   -body=load-tests/run-9000/body5p.bin \
   -header="Content-Type: multipart/form-data; boundary=$B" \
   -rate=400 -duration=30s -timeout=35s -max-body=1024 \
-  | tee load-tests/run-9000/results-mixed.bin
+  -output=load-tests/run-9000/results-mixed.bin
 vegeta report < load-tests/run-9000/results-mixed.bin
 vegeta report --type=json < load-tests/run-9000/results-mixed.bin > load-tests/run-9000/results-mixed.json
 
@@ -349,57 +400,73 @@ vegeta attack -targets=load-tests/run-9000/targets-20p.txt \
   -body=load-tests/run-9000/body20p.bin \
   -header="Content-Type: multipart/form-data; boundary=$B" \
   -rate=150 -duration=30s -timeout=35s -max-body=1024 \
-  | tee load-tests/run-9000/results-20p.bin
+  -output=load-tests/run-9000/results-20p.bin
 vegeta report < load-tests/run-9000/results-20p.bin
 vegeta report --type=json < load-tests/run-9000/results-20p.bin > load-tests/run-9000/results-20p.json
 ```
+
+> **Secuencia recomendada de esta corrida:** A y B se ejecutaron desde un pool
+> **tibio** (tras un warm-up de los tres fixtures). En la práctica conviene
+> reiniciar el servicio entre A y B —o al menos entre corridas— porque A deja el
+> event loop saturado y contaminaría una B inmediata. En esta sesión el warm-up
+> del pool `forkserver` costó ~3.4 s en el primer POST y quedó amortizado
+> después.
 
 Artefactos en `load-tests/run-9000/`:
 
 | Archivo | Contenido |
 |---|---|
 | `k6-output.txt` | Salida completa de k6 (thresholds, checks, métricas) |
-| `server.log` | Log completo del servicio durante las pruebas |
+| `server.log` | Log del servicio durante k6 + ataque A |
+| `server-b.log` | Log del servicio durante el ataque B (instancia reiniciada) |
 | `targets-mixed.txt` / `targets-20p.txt` | Targets Vegeta (rutas absolutas a `:9000`) |
 | `body5p.bin` / `body20p.bin` | Cuerpos multipart (`checksum` + `file`) |
 | `results-mixed.bin` / `.json` / `vegeta-report-mixed.txt` | Ataque A (mixto) |
 | `results-20p.bin` / `.json` / `vegeta-report-20p.txt` | Ataque B (homogéneo 20 pág.) |
 
+**Cómo leer los `.json`:** el campo `"success"` es la razón sobre **todos** los
+targets (incluye los `GET` de la sonda en el ataque A) y `"status_codes":{"0":N}`
+son cortes de cliente por timeout, no respuestas del servidor (ver § 3.3).
+
 **Limitaciones:** host compartido (WSL2) — la rodilla es sensible a la carga
-del host entre corridas; las latencias aisladas (§ 3.5) son de una única
-sesión. No se realizó soak largo ni muestreo de RSS en vivo. Los cuerpos
-`valid_*` son sintéticos (páginas de texto aleatorio). k6 corrió como snap
-(sin permiso de escritura fuera del home, por lo que no se generó el
-`--summary-export` JSON; el reporte textual es equivalente).
+del host entre corridas y las latencias aisladas (§ 3.5) son de una única sesión.
+Los logs de servicio (`server.log`, `server-b.log`) están en `.gitignore`
+(regenerables con el paso 1); los artefactos de medición (`.bin`, `.json`,
+reportes, `k6-output.txt`) sí se versionan. El RSS de § 3.5 es un muestreo
+puntual **en reposo** (no un soak): T16 sigue abierto. Los cuerpos `valid_*`
+son sintéticos (páginas de texto aleatorio). k6 corrió como snap (sin permiso
+de escritura fuera del home, por lo que no se generó el `--summary-export`
+JSON; el reporte textual es equivalente).
 
-## 9. Cambios de comportamiento posteriores a esta corrida (TASK-12..24)
+## 9. Cambios de comportamiento (TASK-12..24) que explican la diferencia
 
-La suite de robustez (método `docs/tasks/todo.md`, Fases A–C) cambió varios
-comportamientos que **invalidan o matizan** las cifras de § 3: los thresholds
-de latencia/bytes y las historias abiertas de § 5/§ 6 deben re-medirse. Los
-veredictos de esta corrida describen el binario **antes** de estas tareas; el
-detalle de cada una (con sus tests) está en `docs/tasks/todo.md`.
+Las cifras de § 3 y el veredicto de § 5 corresponden al binario **posterior** a
+la suite de robustez (TASK-12…TASK-24, fases A–C del `docs/tasks/todo.md`); esta
+sección resume **qué cambió** respecto de la corrida previa y por eso los
+números se movieron —especialmente en el régimen de bytes—. El detalle de cada
+tarea (con sus tests) vive en `docs/tasks/todo.md` y
+`docs/optimization-report.md`.
 
-| Cambio | Dónde | Impacto esperado sobre las medidas |
+| Cambio | Dónde | Efecto observado en esta corrida |
 |---|---|---|
-| Fast-fail `503`/`413` **antes de leer el cuerpo** (backstop de tamaño + puerta) | `extract.py`, `middlewares.py` (TASK-12) | Cierra la historia abierta de § 5 (T9/T10): en el régimen de bytes el `503` aparece sin consumir el upload; cambia coste de bytes por request fallido |
-| **Timeout único en el pool**; la ruta ya no envuelve en `asyncio.wait_for`; el buffer se libera al terminar la extracción | `pool.py`, `extract.py` (TASK-13) | p99 de saturación (T7) debería acotarse mejor; elimina la doble espera |
-| `_Gate` sobre `BoundedSemaphore` (ceiling autoritario) | `pool.py` (TASK-14) | `inflight` nunca excede `MAX_CONCURRENT`; medición de rodilla más precisa |
-| Tope de cabeceras de parte multipart (16 KiB) | `multipart_reader.py` (TASK-15) | 422 acotado ante streams infinitos de cabeceras (antes: crecimiento sin cota) |
-| Log de excepciones no esperadas (traceback estructurado) + stdout por defecto | `handlers.py`, `logging_.py` (TASK-16) | 500 pasa a ser diagnosticable; sin impacto en p95 |
-| `Settings` con validadores + entrypoint `python -m pdfextractor` | `settings.py`, `__main__.py` (TASK-17) | Config inválida falla al arrancar, no en runtime |
+| Fast-fail `503`/`413` **antes de leer el cuerpo** (backstop de tamaño + puerta) | `extract.py`, `middlewares.py` (TASK-12) | **El cambio dominante.** Cierra la historia abierta: el `503` acotado ahora aparece en todos los regímenes (§ 3.2–§ 3.4) y el coste de bytes por request fallido cae a casi cero |
+| **Timeout único en el pool**; la ruta ya no envuelve en `asyncio.wait_for`; el buffer se libera al terminar la extracción | `pool.py`, `extract.py` (TASK-13) | Desaparecieron los `504` (0 en toda la sesión); p99 de saturación acotado (T7 = 19.93 s) |
+| `_Gate` sobre `BoundedSemaphore` (ceiling autoritario) | `pool.py` (TASK-14) | `inflight` nunca excede `MAX_CONCURRENT`; throughput de `200` reproducible (28.78 rps en B) |
+| Tope de cabeceras de parte multipart (16 KiB) | `multipart_reader.py` (TASK-15) | 422 acotado ante streams infinitos de cabeceras (no ejercido por esta carga) |
+| Log de excepciones no esperadas (traceback estructurado) + stdout por defecto | `handlers.py`, `logging_.py` (TASK-16) | 500 diagnosticable; sin impacto en p95 |
+| `Settings` con validadores + entrypoint `python -m pdfextractor` | `settings.py`, `__main__.py` (TASK-17) | Config inválida falla al arrancar |
 | Dialecto de error 404/405/422 con una sola clave `{"error"}` | `handlers.py` (TASK-18) | Contrato de errores homogéneo |
-| Pool en **`forkserver`** (no `fork`) | `pool.py` (TASK-19) | **Riesgo en el p99 serán más altos**: arranque de workers ~0,6 s (idle) a ~12 s (bajo carga) en este host; la suite re-jala con pools tibios en tests; re-medir cola/rodilla |
-| **Cotas de salida** `MAX_PAGES` / `MAX_EXTRACTED_CHARS` → `422` | `errors.py`, `extraction_service.py`, `settings.py` (TASK-20) | Bombas de descompresión se cortan con 422 acotado (nunca OOM); nuevas filas de error |
+| Pool en **`forkserver`** (no `fork`) | `pool.py` (TASK-19) | Workers seguros con el servidor multihilo; **primer trabajo en frío ~3.4 s**, luego amortizado. Explica parte del alza del p95 de línea base (289 ms vs. 65 ms previos) |
+| **Cotas de salida** `MAX_PAGES` / `MAX_EXTRACTED_CHARS` → `422` | `errors.py`, `extraction_service.py`, `settings.py` (TASK-20) | Bombas de descompresión cortadas con 422 acotado; no ejercidas por esta carga |
 | Métricas de proceso/GC + render `/metrics` en threadpool | `metrics.py` (TASK-21) | `/metrics` ya no bloquea el event loop; series nuevas `process_cpu_*`, `python_gc_*` |
 | Gates de CI (memory, `pip-audit`, build imagen) | `.github/workflows/ci.yml` (TASK-23) | Calidad reproducible en CI |
+| Documentación de oversubscripción de workers | `README.md` (TASK-24) | Sin impacto en las medidas |
 
-**Estado de verificación:** suite completa **143 passed / 2 skipped** +
-`-m memory` **2 passed** tras TASK-12..24; `ruff check`, `ruff format --check` y
-`mypy` verdes. La **nueva corrida de carga sobre `:9000`** (re-ejecutar § 7) y la
-**revisión humana** de TASK-12..24 quedan como paso pendiente del CP-5;
-previsto además que los números de rodilla/baseline se movilicen levemente por
-el cambio de start method del pool.
+**Estado de verificación:** suite **143 passed / 2 skipped** + `-m memory`
+**2 passed** (ruff/format/mypy verdes) y **corrida de carga sobre `:9000`
+re-ejecutada y capturada en `load-tests/run-9000/`** (esta misma sesión). El CP-5
+queda solo a la espera de la **revisión humana** de TASK-12..24; T16 (soak de
+RSS) permanece pendiente.
 
 ## 8. Referencias
 
