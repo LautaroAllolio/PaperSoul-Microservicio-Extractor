@@ -2,9 +2,13 @@
 
 The route declares ``Request`` — never ``UploadFile``/``File``/``Form`` — so
 Starlette never runs its ``MultiPartParser`` and nothing is ever spooled to
-disk. The body is framed by the stdlib-only reader into a pooled buffer, the
-buffer is handed to the application service, and the buffer goes straight back
-to the pool. Domain failures travel up untouched to the global handlers.
+disk. Admission is reserved *before* the body is framed: a request that cannot
+get a concurrency slot within the queue timeout fails fast with ``503`` without
+reading a single byte, so the reader can never fall back to an unbounded ad-hoc
+buffer. Once admitted, the body is framed by the stdlib-only reader into a
+pooled buffer, the buffer is handed to the application service, and the buffer
+goes straight back to the pool. Domain failures travel up untouched to the
+global handlers.
 """
 
 import asyncio
@@ -13,7 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from pdfextractor.application.errors import ExtractionTimeoutError
+from pdfextractor.application.errors import ExtractionTimeoutError, OverloadError
 from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.http.multipart_reader import (
     boundary_from_content_type,
@@ -34,10 +38,25 @@ async def extract_document(
     service: Annotated[ExtractionService, Depends(get_extraction_service)],
 ) -> ExtractResponse:
     settings = request.app.state.settings
+    ready_state = request.app.state.ready_state
+    admission = request.app.state.admission
     boundary = boundary_from_content_type(request.headers.get("content-type", ""))
-    pool = request.app.state.pool
-    sink = pool.acquire()
+
+    if admission.saturated:
+        ready_state.mark_overloaded()
     try:
+        await admission.admit(settings.queue_timeout_seconds)
+    except OverloadError:
+        ready_state.mark_overloaded()
+        raise
+
+    pool = request.app.state.pool
+    sink: bytearray | None = None
+    try:
+        sink = pool.acquire()
+        if sink is None:  # defensive: a reserved slot always owns a buffer
+            ready_state.mark_overloaded()
+            raise OverloadError()
         buffer = await read_multipart_file(
             request.stream(),
             boundary=boundary,
@@ -63,6 +82,9 @@ async def extract_document(
     finally:
         if sink is not None:
             pool.release(sink)
+        admission.release()
+        if admission.idle:
+            ready_state.mark_ready()
     return ExtractResponse(
         extracted_text=result.extracted_text,
         extraction_method=result.extraction_method,

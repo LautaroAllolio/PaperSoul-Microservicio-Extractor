@@ -106,7 +106,7 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
 
 ### Fase A — Correctitud y anti-DoS
 
-- [ ] **TASK-12: Control de admisión ANTES de leer el body (fast-fail 503)**
+- [x] **TASK-12: Control de admisión ANTES de leer el body (fast-fail 503)**
       — Hoy el gate vive en `ProcessPoolTextExtractor.extract`
       (`infrastructure/concurrency/pool.py:119`) y solo se alcanza **después** de
       `read_multipart_file`. Cuando todos los buffers del pool están prestados,
@@ -124,6 +124,17 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
     `inflight <= N`, respuestas `503` acotadas, sin crecimiento del número de
     buffers vivos.
   - **AC-12.4:** contrato (`docs/api-contract.md`) sigue: `503 {"error":"overloaded"}`.
+  - **Completado:** nuevo `infrastructure/concurrency/admission.py` (`AdmissionGate`,
+    `asyncio.Semaphore` + cola con timeout + contadores `inflight`/`waiting`/
+    `saturated`/`idle`); el lifespan lo instala en `app.state.admission` y la ruta
+    `extract.py` lo reserva **antes** de `read_multipart_file`, marca
+    `ready_state.mark_overloaded()` al saturarse/agotar la cola y `mark_ready()` al
+    quedar `idle`. El buffer pooled se adquiere solo tras la admisión (nunca `None`
+    hacia el reader). Tests: `test_admission_gate.py` (unidad) + `integration/
+    test_admission.py` (sin framing del body rechazado; capacidad nunca excedida).
+    Verificación: **105 passed / 2 skipped**, `-m memory` **2 passed**, ruff +
+    ruff format + mypy strict verdes. Nota: el `_Gate` interno del pool permanece
+    como guardia secundario; su consolidación es TASK-13/14.
 
 - [ ] **TASK-13: Timeout único; liberar buffer/permiso solo cuando el trabajo termina**
       — `extract.py:49-65` envuelve `asyncio.to_thread(service.extract, buffer)` en

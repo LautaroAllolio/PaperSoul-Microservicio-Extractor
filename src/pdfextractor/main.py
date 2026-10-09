@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from pdfextractor import __version__
 from pdfextractor.application.services.extraction_service import ExtractionService
+from pdfextractor.infrastructure.concurrency.admission import AdmissionGate
 from pdfextractor.infrastructure.concurrency.pool import (
     ProcessPoolTextExtractor,
     ReadyState,
@@ -46,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = resolved
         app.state.ready_state = ReadyState()
+        app.state.admission = AdmissionGate(capacity=resolved.effective_max_concurrent_extractions)
         extractor = ProcessPoolTextExtractor(
             workers=resolved.effective_workers,
             max_concurrent=resolved.effective_max_concurrent_extractions,
