@@ -1,4 +1,4 @@
-"""``POST /api/v1/extract``: the Extractor's only write route (plan D2, § 4).
+"""``POST /api/v1/extractions``: the Extractor's only write route (plan D2, § 4).
 
 The route declares ``Request`` — never ``UploadFile``/``File``/``Form`` — so
 Starlette never runs its ``MultiPartParser`` and nothing is ever spooled to
@@ -27,7 +27,7 @@ __all__ = ["router"]
 router = APIRouter()
 
 
-@router.post("/api/v1/extract", response_model=ExtractResponse, status_code=200)
+@router.post("/api/v1/extractions", response_model=ExtractResponse, status_code=200)
 async def extract_document(
     request: Request,
     request_id: Annotated[str, Depends(get_request_id)],
