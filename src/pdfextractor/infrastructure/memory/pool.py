@@ -1,4 +1,4 @@
-"""Bounded pool of reusable ``bytearray`` sinks (plan-extractor.md § 5).
+"""Bounded pool of reusable ``bytearray`` sinks (docs/tasks/plan.md § 5).
 
 The pool is the Extractor's memory ceiling: at most ``capacity`` buffers — the
 configured extraction concurrency — exist at any time. ``acquire`` lends one
