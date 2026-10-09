@@ -16,9 +16,10 @@ import time
 
 import httpx
 import pytest
+from _workers import long_job, slow_job
 from fastapi import FastAPI
 
-from pdfextractor.application.errors import OverloadError
+from pdfextractor.application.errors import ExtractionTimeoutError, OverloadError
 from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.concurrency.pool import (
     ProcessPoolTextExtractor,
@@ -29,23 +30,44 @@ from pdfextractor.main import create_app
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
 
 BOUNDARY = "concurrency-test-boundary"
-SLOW_SECONDS = 0.4
 
 
-def slow_job(data: bytes) -> tuple[str, int]:
-    """Module-level worker entry that holds its slot for ``SLOW_SECONDS``."""
-    time.sleep(SLOW_SECONDS)
-    return "hello from worker", 1
+def noop_job(data: bytes | bytearray) -> tuple[str, int]:
+    """Instant worker entry living in the tiny ``_workers`` module."""
+    return "", 0
+
+
+def _wait_inflight(extractor: ProcessPoolTextExtractor, expected: int) -> None:
+    """Block until ``inflight()`` reaches ``expected`` (thread-start race guard)."""
+    deadline = time.monotonic() + 10.0
+    while extractor.inflight() != expected and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def warm_up(extractor: ProcessPoolTextExtractor) -> None:
+    """Pre-spawn the ``forkserver`` workers outside any timed window.
+
+    Worker start-up costs from <1 s idle up to ~12 s under load on this host,
+    which the short gate/queue timeouts cannot afford. Handing the executor one
+    instant no-op task per worker forces the pool to pre-spawn them; the gate is
+    untouched, so ``inflight``/``queue_depth`` start at 0 and the timed
+    assertions measure the pool, not process start-up.
+    """
+    workers = extractor._executor._max_workers  # type: ignore[attr-defined]
+    futures = [extractor._executor.submit(noop_job, b"") for _ in range(workers)]
+    for future in futures:
+        future.result(timeout=120.0)
 
 
 def pyd_extractor(
     *,
     workers: int = 1,
     max_concurrent: int = 1,
-    queue_timeout: float = 0.2,
-    extraction_timeout: float = 2.0,
+    queue_timeout: float = 5.0,
+    extraction_timeout: float = 5.0,
 ) -> ProcessPoolTextExtractor:
-    return ProcessPoolTextExtractor(
+    """Build a warm extractor whose timeouts never bite for regular work."""
+    extractor = ProcessPoolTextExtractor(
         workers=workers,
         max_concurrent=max_concurrent,
         queue_timeout=queue_timeout,
@@ -53,6 +75,8 @@ def pyd_extractor(
         job=slow_job,
         ready_state=ReadyState(),
     )
+    warm_up(extractor)
+    return extractor
 
 
 def multipart(content: bytes) -> tuple[bytes, str]:
@@ -116,7 +140,7 @@ def test_saturation_fails_fast_with_overload_error_until_drained() -> None:
 
     first = threading.Thread(target=lambda: extractor.extract(b"first"))
     first.start()
-    time.sleep(0.05)
+    _wait_inflight(extractor, 1)
     started_at = time.monotonic()
 
     with pytest.raises(OverloadError):
@@ -139,7 +163,9 @@ def test_a_worker_crash_is_detected_and_the_pool_keeps_serving(valid_pdf: bytes)
         max_concurrent=2,
         queue_timeout=2.0,
         extraction_timeout=5.0,
+        ready_state=ReadyState(),
     )
+    warm_up(extractor)
 
     warmed_text, warmed_pages = extractor.extract(valid_pdf)
     assert "Hello PaperSoul" in warmed_text
@@ -160,12 +186,61 @@ def test_a_worker_crash_is_detected_and_the_pool_keeps_serving(valid_pdf: bytes)
     extractor.close()
 
 
+def test_a_timed_out_extraction_keeps_its_slot_until_the_worker_finishes() -> None:
+    """A timeout must not free the slot while the runaway worker keeps computing.
+
+    ``future.cancel()`` cannot stop a running process, so releasing the gate
+    eagerly would let another extraction start while the worker still hogs the
+    CPU. The slot is released by a done-callback, so ``inflight`` reflects live
+    work until the job actually finishes.
+    """
+    extractor = ProcessPoolTextExtractor(
+        workers=1,
+        max_concurrent=1,
+        queue_timeout=0.1,
+        extraction_timeout=0.1,
+        job=long_job,
+        ready_state=ReadyState(),
+    )
+    warm_up(extractor)
+
+    with pytest.raises(ExtractionTimeoutError):
+        extractor.extract(b"pdf")
+
+    assert extractor.inflight() == 1
+
+    with pytest.raises(OverloadError):
+        extractor.extract(b"pdf")
+    assert extractor.ready_state.ready is False
+
+    deadline = time.monotonic() + 5.0
+    while extractor.inflight() != 0 and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert extractor.inflight() == 0
+    assert extractor.ready_state.ready is True
+    extractor.close()
+
+
+def test_the_pool_starts_workers_in_a_safe_context_not_fork() -> None:
+    extractor = pyd_extractor(workers=1, max_concurrent=1)
+    try:
+        context = extractor._executor._mp_context  # type: ignore[attr-defined]
+        assert context.get_start_method() == "forkserver"
+
+        extractor._restart_pool()
+        restarted = extractor._executor._mp_context  # type: ignore[attr-defined]
+        assert restarted.get_start_method() == "forkserver"
+    finally:
+        extractor.close()
+
+
 def test_queue_depth_tracks_blocked_requests() -> None:
     extractor = pyd_extractor(workers=1, max_concurrent=1, queue_timeout=0.2)
 
     first = threading.Thread(target=lambda: extractor.extract(b"first"))
     first.start()
-    time.sleep(0.05)
+    _wait_inflight(extractor, 1)
 
     outcomes: list[BaseException] = []
 
@@ -177,7 +252,6 @@ def test_queue_depth_tracks_blocked_requests() -> None:
 
     second = threading.Thread(target=wait_then_extract)
     second.start()
-    time.sleep(0.05)
 
     assert extractor.inflight() == 1
     assert extractor.queue_depth() >= 1
@@ -218,6 +292,7 @@ async def test_saturation_answers_503_overloaded_and_ready_tracks_recovery() -> 
             job=slow_job,
             ready_state=ReadyState(),
         )
+        warm_up(pool)
         app.state.ready_state = pool.ready_state
         setattr(app.state, EXTRACTION_SERVICE, ExtractionService(extractor=pool, min_text_length=1))
 
@@ -225,7 +300,9 @@ async def test_saturation_answers_503_overloaded_and_ready_tracks_recovery() -> 
         first = asyncio.create_task(
             client.post("/api/v1/extractions", content=body, headers={"Content-Type": content_type})
         )
-        await asyncio.sleep(0.05)
+        deadline = asyncio.get_running_loop().time() + 10.0
+        while pool.inflight() == 0 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
 
         second = await asyncio.wait_for(
             client.post(
