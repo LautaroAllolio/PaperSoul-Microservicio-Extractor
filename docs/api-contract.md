@@ -37,12 +37,17 @@ Contrato respaldado por el test de identidad (`tests/extractor/test_repository_i
   ```
   Se degrada a `503` bajo overload (todos los slots de concurrencia ocupados).
 
-### `POST /api/v1/extract` — extracción PDF → JSON
+### `POST /api/v1/extractions` — extracción PDF → JSON
 
-`multipart/form-data` con **un** campo `file` (el PDF). No se aceptan otros campos; el conteo de partes se resuelve con el primer `file`.
+`multipart/form-data` con un campo `file` (el PDF). El orquestador antepone un
+campo `checksum` (SHA-256 del binario); se ignora y el reader salta a `file`. No
+se aceptan otros campos; el conteo de partes se resuelve con el primer `file`.
 
 **Request**
 - `Content-Type: multipart/form-data; boundary=...` (STDLIB/determinista).
+- Correlación: se honra `X-Correlation-Id` (lo que reenvía el orquestador), con
+  `X-Request-Id` como fallback; se ecoa bajo el mismo header.
+- `X-Document-Checksum` (opcional): no es obligatorio; se tolera.
 - Límite de tamaño: `PDFEXTRACTOR_MAX_UPLOAD_BYTES` (por defecto 50 MB), verificado mid-stream y como backstop por `Content-Length`.
 
 **`200 OK`** — exactamente tres claves:
@@ -66,9 +71,13 @@ Contrato respaldado por el test de identidad (`tests/extractor/test_repository_i
 **Referencia `curl`**
 
 ```bash
-curl -i -X POST http://localhost:8001/api/v1/extract \
+curl -i -X POST http://localhost:8001/api/v1/extractions \
   -F "file=@/ruta/contrato.pdf;type=application/pdf"
 ```
+
+> Este path (`/api/v1/extractions` plural) es el que invoca el orquestador
+> (`internal/client/extractor.go`). Respuesta y campos multipart (`file` +
+> `checksum`) calzan con su contrato tipado.
 
 ### `GET /metrics` — Prometheus (opcional)
 

@@ -68,13 +68,16 @@ Documentación completa y estricta: [`docs/api-contract.md`](docs/api-contract.m
 |---|---|---|
 | `/health` | GET | Liveness: `200 {"status":"ok","service":"pdfextractor","version":"..."}` |
 | `/ready` | GET | Readiness: `200 {"status":"ready"}` o `503 {"status":"not ready"}` |
-| `/api/v1/extract` | POST | `multipart/form-data`, campo `file` → `200` con texto/duración/páginas |
+| `/api/v1/extractions` | POST | `multipart/form-data`, campo `file` → `200` con texto/duración/páginas |
 | `/metrics` | GET | Prometheus text (solo si `PDFEXTRACTOR_METRICS_ENABLED=true`) |
+
+> El path coincide con el del orquestador (`POST /api/v1/extractions`): acepta el
+> multipart con los campos `checksum` + `file` y honra `X-Correlation-Id`.
 
 Ejemplo `curl`:
 
 ```bash
-curl -X POST http://localhost:8001/api/v1/extract \
+curl -X POST http://localhost:8001/api/v1/extractions \
   -F "file=@/ruta/contrato.pdf;type=application/pdf"
 ```
 

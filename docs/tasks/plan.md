@@ -34,6 +34,12 @@ constante, sin bases de datos ni lógica de negocio.
   sin rastro de `paperextractor`. Al final, `grep -r paperextractor` vacío.
 - **AD5 — No hay código de bases de datos** en el repo (auditado: cero referencias a
   sqlite/postgres/mongo/alembic). Eliminable la preocupación de DB.
+- **AD6 — El contrato HTTP calza con el orquestador.** La ruta es
+  `POST /api/v1/extractions` (plural, la que invoca `internal/client/extractor.go`),
+  se honra `X-Correlation-Id` (fallback `X-Request-Id`) y la respuesta queda
+  `{"extracted_text","extraction_method","page_count"}` — igual que
+  `domain.ExtractResponse`. El texto vacío es válido en despliegue Docker
+  (`PDFEXTRACTOR_MIN_TEXT_LENGTH=0`), porque el orquestador lo considera válido.
 
 ## Task List
 
@@ -70,6 +76,19 @@ constante, sin bases de datos ni lógica de negocio.
 
 ### Checkpoint: Complete
 - [x] Todas las acceptance criteria cumplidas; listo para PR único.
+
+### Paso 4: Integración con el Orquestador (COMPLETADO)
+- [x] **TASK-07: Endpoint alineado** — ruta `POST /api/v1/extractions` (la que
+      invoca el orquestador). Respuesta y modelo Pydantic intactos.
+- [x] **TASK-08: Correlación y headers** — `X-Correlation-Id` honrado y ecoado
+      (fallback `X-Request-Id`); multipart checksum+file cubierto por test.
+- [x] **TASK-09: Tests/docs/load al nuevo path** — suite verde.
+- [x] **TASK-10: Dockerfile del extractor** — puerto `9000`,
+      `MIN_TEXT_LENGTH=0`, no-root.
+- [x] **TASK-11: Guía E2E** — `docs/integration.md`.
+
+### Checkpoint CP-4: Integración
+- [x] Suite + memory + ruff + mypy verdes; imagen construida y probada en `:9000`.
 
 ## Riesgos y Mitigaciones
 
