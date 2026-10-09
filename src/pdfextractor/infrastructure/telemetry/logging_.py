@@ -1,4 +1,4 @@
-"""Single-line JSON structured logging (plan-extractor.md § 6).
+"""Single-line JSON structured logging (docs/tasks/plan.md § 6).
 
 The ``pdfextractor.http`` logger records every request with the contract fields
 (``request_id``, ``duration_ms``, ``bytes``, ``pages``, ``method``, ``outcome``,
@@ -42,19 +42,22 @@ class JsonFormatter(logging.Formatter):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value
+        if record.exc_info is not None:
+            payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def configure_logging(level: str, stream: Any | None = None) -> logging.Logger:
     """Attach a JSON ``StreamHandler`` to the HTTP logger, once per process.
 
-    ``stream`` lets a test capture lines into a buffer; production uses stderr.
+    ``stream`` lets a test capture lines into a buffer; production uses stdout so
+    the container runtime collects the stream without an extra hop.
     """
     target = logging.getLogger("pdfextractor.http")
     target.setLevel(_resolve(level))
     if target.handlers:
         return target
-    handler = logging.StreamHandler(stream=sys.stderr if stream is None else stream)
+    handler = logging.StreamHandler(stream=sys.stdout if stream is None else stream)
     handler.setFormatter(JsonFormatter())
     target.addHandler(handler)
     target.propagate = False
