@@ -7,8 +7,10 @@ get a concurrency slot within the queue timeout fails fast with ``503`` without
 reading a single byte, so the reader can never fall back to an unbounded ad-hoc
 buffer. Once admitted, the body is framed by the stdlib-only reader into a
 pooled buffer, the buffer is handed to the application service, and the buffer
-goes straight back to the pool. Domain failures travel up untouched to the
-global handlers.
+goes straight back to the pool. The pool owns the single extraction timeout, so
+the route just awaits the worker to completion and never releases the buffer
+while an extraction is still holding it. Domain failures travel up untouched to
+the global handlers.
 """
 
 import asyncio
@@ -17,7 +19,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from pdfextractor.application.errors import ExtractionTimeoutError, OverloadError
+from pdfextractor.application.errors import OverloadError
 from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.http.multipart_reader import (
     boundary_from_content_type,
@@ -64,13 +66,7 @@ async def extract_document(
             sink=sink,
         )
         started = time.perf_counter()
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(service.extract, buffer),
-                timeout=settings.extraction_timeout_seconds,
-            )
-        except TimeoutError as exc:
-            raise ExtractionTimeoutError() from exc
+        result = await asyncio.to_thread(service.extract, buffer)
         duration = time.perf_counter() - started
         request.scope.setdefault("state", {})["outcome"] = "ok"
         request.scope.setdefault("state", {})["pages"] = result.page_count
