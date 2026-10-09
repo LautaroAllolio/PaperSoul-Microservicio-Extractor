@@ -91,3 +91,172 @@ Orquestador (`internal/client/extractor.go`, `internal/domain/document.go`,
       `:9000`; extracción real (multipart checksum+file) → `200` con las 3 claves
       y `x-correlation-id` ecoado; PDF sin texto → `200` con texto vacío
 - [x] Revisión con humano (TASK-07..11 aprobadas)
+
+## Paso 5: Auditoría de deuda técnica, robustez y cumplimiento 12-Factor
+
+Auditoría read-only sobre el estado commiteado en `199ef43`. Decisiones de alcance
+acordadas con el humano: **Fases A + B + C completas**; se **mantiene `.env`** como
+fuente de configuración (no se elimina); se autorizan cambios de comportamiento
+visibles que aumenten la seguridad (fast-fail 503 antes de leer body, timeout único,
+process pool con `spawn`). Flujo TDD estricto (rojo → verde) + pausa obligatoria tras
+cada tarea.
+
+Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
+`docs/api-contract.md`, `docs/integration.md`, `load-tests/run-9000/`.
+
+### Fase A — Correctitud y anti-DoS
+
+- [ ] **TASK-12: Control de admisión ANTES de leer el body (fast-fail 503)**
+      — Hoy el gate vive en `ProcessPoolTextExtractor.extract`
+      (`infrastructure/concurrency/pool.py:119`) y solo se alcanza **después** de
+      `read_multipart_file`. Cuando todos los buffers del pool están prestados,
+      `BufferPool.acquire()` devuelve `None` y `multipart_reader.py:59` crea un
+      `bytearray()` ad-hoc **sin cota** que nunca vuelve al pool: bajo overload cada
+      request encolado bufferea igual su upload completo (causa raíz de los 504s del
+      run Vegeta B y del crecimiento de memoria). Mover la admisión/pool-acquire al
+      inicio de la ruta, antes de consumir `request.stream()`.
+  - **AC-12.1:** con el pool saturado, un upload completo se rechaza `503` **antes**
+    de bufferear el cuerpo (no se consumen bytes del stream).
+  - **AC-12.2:** la ruta nunca usa un buffer no-pooled: `grep -n "bytearray()"` en el
+    camino de request es vacío (el fallback ad-hoc de `read_multipart_file` deja de
+    utilizarse desde la ruta).
+  - **AC-12.3:** test nuevo: N+1 uploads concurrentes con capacidad de pool N →
+    `inflight <= N`, respuestas `503` acotadas, sin crecimiento del número de
+    buffers vivos.
+  - **AC-12.4:** contrato (`docs/api-contract.md`) sigue: `503 {"error":"overloaded"}`.
+
+- [ ] **TASK-13: Timeout único; liberar buffer/permiso solo cuando el trabajo termina**
+      — `extract.py:49-65` envuelve `asyncio.to_thread(service.extract, buffer)` en
+      `asyncio.wait_for`; al vencer, `wait_for` cancela solo el wrapper asyncio pero el
+      thread de `to_thread` **sigue corriendo** y el `finally` devuelve el `sink` al
+      pool y lo limpia → otra request reutiliza el mismo `bytearray` mientras el worker
+      lo lee (corrupción cruzada). Igual patrón en `pool.py:127,133`: `future.cancel()`
+      no detiene al proceso y `_gate.release()` corre en `finally` (permiso liberado
+      con trabajo en vuelo). Además hay **doble timeout** compitiendo (outer 30 s vs
+      `future.result(timeout=...)` 30 s, `pool.py:125`).
+  - **AC-13.1:** un timeout de extracción **nunca** permite que otra request observe
+    el mismo buffer pooled (test de regresión con extractor fake lento).
+  - **AC-13.2:** un único presupuesto de timeout gobierna la extracción (se elimina el
+    `wait_for` externo; el pool es la única autoridad).
+  - **AC-13.3:** el permiso del gate se libera solo cuando el trabajo realmente
+    terminó; `inflight()` refleja trabajo vivo, no solo requests esperando.
+  - **AC-13.4:** timeout sigue mapeando a `504 {"error":"timeout"}`.
+
+- [ ] **TASK-14: Reemplazar `_Gate` por `threading.BoundedSemaphore`**
+      — `_Gate.acquire` (`pool.py:60-74`) despierta a un waiter y hace `_in_use += 1`
+      **sin re-validar el predicado**: un caller nuevo puede tomar el fast-path
+      (`in_use: 0→1`) entre `release()` y el re-lock del waiter, y el waiter luego deja
+      `in_use = 2` con `permits = 1` → más extracciones en vuelo que el tope, cola
+      ilimitada del `ProcessPoolExecutor`, backpressure anulada.
+  - **AC-14.1:** bajo stress de contención (fast-path + waiter despertado), la
+    concurrencia **nunca** supera `permits` (test determinista con barreras).
+  - **AC-14.2:** se preservan `inflight()`, `queue_depth()`, `mark_overloaded/ready` y
+    el comportamiento de `/ready` (`200`/`503`).
+  - **AC-14.3:** se mantiene `on_wait` para marcar overload al entrar en cola.
+
+- [ ] **TASK-15: Acotar el buffer de preámbulo/headers del multipart reader**
+      — `_read_headers` (`multipart_reader.py:139-150`) no poda ni tiene tope: un bloque
+      de headers de parte que nunca termina (`\r\n\r\n` ausente) hace crecer `_buf` sin
+      límite (DoS). (`_seek_boundary` y `_skip_part` sí podan; `_read_file` está
+      acotado por `max_bytes`.)
+  - **AC-15.1:** un bloque de headers sin terminador lanza `MalformedMultipartError`
+    al superar un tope fijo, en vez de crecer en memoria.
+  - **AC-15.2:** test que alimenta un preámbulo/headers ilimitado y verifica que
+    `len(_buf)` queda acotado y que se lanza el error esperado.
+  - **AC-15.3:** lectura legítima (checksum + file) intacta; suite verde.
+
+### Fase B — Cumplimiento 12-Factor y dialecto de errores
+
+- [ ] **TASK-16: Logs a stdout + traceback estructurado + `PYTHONUNBUFFERED`**
+      — Los logs JSON van a **stderr** (`logging_.py:57`); el handler catch-all
+      (`handlers.py:24-27`) devuelve `{"error":"internal"}` y registra solo el *tipo*
+      de excepción, sin `exc_info` por el logger estructurado (los tracebacks quedan
+      en el logger plano de uvicorn). El `Dockerfile` no define `PYTHONUNBUFFERED`.
+  - **AC-16.1:** `configure_logging` emite a **stdout** por defecto.
+  - **AC-16.2:** un error no esperado produce **una** línea JSON en stdout con el
+    traceback (`exc_info`), sin filtrar detalles al cliente (el cuerpo sigue
+    `500 {"error":"internal"}`).
+  - **AC-16.3:** `Dockerfile` incluye `PYTHONUNBUFFERED=1`.
+  - **AC-16.4:** test captura la línea estructurada del 500.
+
+- [ ] **TASK-17: Endurecer configuración (manteniendo `.env`)**
+      — `Settings` (`settings.py:17-33`) carga `.env`, pero: no tiene validadores;
+      `host`/`port` están definidos y **nunca se usan** (uvicorn CLI fija `--port`);
+      `.env.example` trae `PDFEXTRACTOR_WORKERS=` y
+      `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=` vacíos sobre campos `int | None`
+      (probable `ValidationError` al copiar el ejemplo). Añadir `env_ignore_empty=True`,
+      validadores de rango y hacer que `PDFEXTRACTOR_HOST`/`PDFEXTRACTOR_PORT` gobiernen
+      el arranque (entrypoint/CMD) o eliminarlos si no aplican.
+  - **AC-17.1:** copiar `.env.example` → `.env` arranca sin error (vacíos → `None`).
+  - **AC-17.2:** valores inválidos (`max_upload_bytes <= 0`, timeout `<= 0`,
+    `workers < 1`, `log_level` inválido) fallan con mensaje claro.
+  - **AC-17.3:** `PDFEXTRACTOR_HOST`/`PDFEXTRACTOR_PORT` tienen efecto real en el
+    arranque (o se eliminan y se actualiza `.env.example`/`api-contract.md`).
+  - **AC-17.4:** tests de settings (válidos e inválidos) verdes.
+
+- [ ] **TASK-18: Unificar el dialecto de error a `{"error": ...}`**
+      — Solo `PdfExtractorError` mapea a `{"error"}`. FastAPI/Starlette siguen
+      respondiendo 404/405/422 con `{"detail": ...}`, contradiciendo
+      `api-contract.md:8,88-100`.
+  - **AC-18.1:** 404, 405 y 422 responden con una sola clave `{"error": ...}`.
+  - **AC-18.2:** se añaden handlers para `RequestValidationError` y
+    `StarletteHTTPException` (sin romper `PdfExtractorError` ni el 500 genérico).
+  - **AC-18.3:** test de contrato ampliado a 404/405/422; tabla de
+    `docs/api-contract.md` coherente.
+
+### Fase C — Robustez, límites, observabilidad y limpieza
+
+- [ ] **TASK-19: Process pool con `spawn`/`forkserver`**
+      — `ProcessPoolExecutor` (`pool.py:109,150`) usa **fork** por defecto en Linux
+      con un servidor multihilo → riesgo de fork no seguro.
+  - **AC-19.1:** el pool crea workers con `mp_context=get_context("spawn")` (o
+    `forkserver`), con guard de importación adecuado.
+  - **AC-19.2:** extracción real y `_restart_pool()` siguen funcionando; suite verde
+    con el nuevo start method.
+
+- [ ] **TASK-20: Cota de tamaño de salida y de páginas (anti decompression-bomb)**
+      — Hoy no hay tope al `extracted_text` ni al `page_count`: un PDF malicioso puede
+      expandir memoria. Añadir settings (`max_extracted_chars`, `max_pages`) y
+      aplicarlos en el servicio de aplicación.
+  - **AC-20.1:** salida/páginas por encima del tope → error de dominio acotado
+    (422), sin OOM.
+  - **AC-20.2:** tests con salida/páginas sintéticas grandes verifican el corte.
+  - **AC-20.3:** settings documentados en `.env.example` y `api-contract.md`.
+
+- [ ] **TASK-21: Métricas — collectors de proceso/GC y render no bloqueante**
+      — El registry privado (`metrics.py:74`) omite collectors de proceso/GC;
+    `render()` corre síncrono dentro de un handler async (`metrics.py:61-69`).
+  - **AC-21.1:** `/metrics` expone series de proceso/GC (Process/Platform/GC
+    collectors ligados al registry privado).
+  - **AC-21.2:** el handler de `/metrics` no bloquea el event loop (render vía
+    `to_thread`/threadpool).
+  - **AC-21.3:** tests de métricas existentes siguen verdes.
+
+- [ ] **TASK-22: Eliminar código muerto y referencias obsoletas**
+      — `_text_extractor_port` sin uso (`pymupdf_extractor.py:52`); refs a
+    `plan-extractor.md` en `settings.py:15`, `logging_.py:1`, `metrics.py:1`; refs a
+    `docs/perf-report.md` inexistente.
+  - **AC-22.1:** `grep` del símbolo muerto y de las refs obsoletas es vacío.
+  - **AC-22.2:** ruff + mypy verdes; suite verde.
+
+- [ ] **TASK-23: Gates de CI (memory, vulnerabilidades, build de imagen)**
+      — `.github/workflows/ci.yml` no ejecuta `-m memory`, ni escaneo de
+    vulnerabilidades, ni build de imagen.
+  - **AC-23.1:** CI corre `pytest -m memory`.
+  - **AC-23.2:** CI ejecuta escaneo de dependencias (p. ej. `uvx pip-audit`).
+  - **AC-23.3:** CI construye la imagen Docker.
+  - **AC-23.4:** YAML válido; pasos reproducibles localmente y documentados.
+
+- [ ] **TASK-24: Documentar oversubscription de `uvicorn --workers N`**
+      — Con `--workers N`, cada worker crea su propio process pool de `workers` = CPU
+      → `N × CPU` procesos (footgun de rendimiento/memoria).
+  - **AC-24.1:** README/notas de operador documentan el efecto y una configuración
+    recomendada (p. ej. `workers` del pool acotado en despliegues multi-worker).
+  - **AC-24.2:** sin cambios de código silenciosos; la decisión queda explícita.
+
+### Checkpoint CP-5: Cierre de auditoría
+- [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-12..24
+- [ ] `docs/report.md` actualizado con el impacto de los cambios de comportamiento
+      (fast-fail antes de leer body, timeout único, pool con `spawn`) y nueva corrida
+      de carga sobre `:9000`
+- [ ] Revisión con humano (TASK-12..24 aprobadas una a una)
