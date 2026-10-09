@@ -12,7 +12,12 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pdfextractor.application.errors import EmptyFileError, NoTextError
+from pdfextractor.application.errors import (
+    EmptyFileError,
+    ExcessivePagesError,
+    ExcessiveTextError,
+    NoTextError,
+)
 
 if TYPE_CHECKING:
     from pdfextractor.application.interfaces import TextExtractor
@@ -35,16 +40,28 @@ def _normalize(text: str) -> str:
 
 
 class ExtractionService:
-    """Runs the read → validate → extract → normalize → gate sequence."""
+    """Runs the read → validate → extract → clamp → normalize → gate sequence."""
 
-    def __init__(self, extractor: "TextExtractor", min_text_length: int) -> None:
+    def __init__(
+        self,
+        extractor: "TextExtractor",
+        min_text_length: int,
+        max_pages: int | None = None,
+        max_extracted_chars: int | None = None,
+    ) -> None:
         self._extractor = extractor
         self._min_text_length = min_text_length
+        self._max_pages = max_pages
+        self._max_extracted_chars = max_extracted_chars
 
     def extract(self, data: bytes | bytearray) -> ExtractionResult:
         if not data:
             raise EmptyFileError()
         text, page_count = self._extractor.extract(data)
+        if self._max_pages is not None and page_count > self._max_pages:
+            raise ExcessivePagesError()
+        if self._max_extracted_chars is not None and len(text) > self._max_extracted_chars:
+            raise ExcessiveTextError()
         normalized = _normalize(text)
         if len(normalized) < self._min_text_length:
             raise NoTextError()

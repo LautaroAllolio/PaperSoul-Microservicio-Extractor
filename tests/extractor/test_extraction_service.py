@@ -16,6 +16,8 @@ import pytest
 from pdfextractor.application.errors import (
     EmptyFileError,
     EncryptionError,
+    ExcessivePagesError,
+    ExcessiveTextError,
     NoTextError,
     UnreadableError,
 )
@@ -163,6 +165,83 @@ def test_the_minimum_length_is_measured_after_normalization() -> None:
 
     with pytest.raises(NoTextError):
         service.extract(b"%PDF-1.7")
+
+
+def test_page_count_over_the_limit_raises_excessive_pages() -> None:
+    fake = FakeExtractor(text="plenty of pages", page_count=11)
+    service = ExtractionService(extractor=fake, min_text_length=1, max_pages=10)
+
+    with pytest.raises(ExcessivePagesError):
+        service.extract(b"%PDF-1.7")
+
+    assert fake.received == b"%PDF-1.7"
+
+
+def test_page_count_at_the_limit_is_accepted() -> None:
+    service = ExtractionService(
+        extractor=FakeExtractor(page_count=10), min_text_length=1, max_pages=10
+    )
+
+    result = service.extract(b"%PDF-1.7")
+
+    assert result.page_count == 10
+
+
+def test_extracted_text_over_the_limit_raises_excessive_text() -> None:
+    fake = FakeExtractor(text="x" * 51, page_count=1)
+    service = ExtractionService(extractor=fake, min_text_length=1, max_extracted_chars=50)
+
+    with pytest.raises(ExcessiveTextError):
+        service.extract(b"%PDF-1.7")
+
+    assert fake.received == b"%PDF-1.7"
+
+
+def test_extracted_text_at_the_limit_is_accepted() -> None:
+    service = ExtractionService(
+        extractor=FakeExtractor(text="x" * 50, page_count=1),
+        min_text_length=1,
+        max_extracted_chars=50,
+    )
+
+    result = service.extract(b"%PDF-1.7")
+
+    assert result.extracted_text == "x" * 50
+
+
+def test_the_page_limit_takes_precedence_when_both_limits_are_exceeded() -> None:
+    service = ExtractionService(
+        extractor=FakeExtractor(text="x" * 51, page_count=11),
+        min_text_length=1,
+        max_pages=10,
+        max_extracted_chars=50,
+    )
+
+    with pytest.raises(ExcessivePagesError):
+        service.extract(b"%PDF-1.7")
+
+
+def test_the_text_limit_is_measured_on_the_raw_text_before_normalization() -> None:
+    raw_with_blank_lines = "abc" + "\n" * 4
+    service = ExtractionService(
+        extractor=FakeExtractor(text=raw_with_blank_lines, page_count=1),
+        min_text_length=1,
+        max_extracted_chars=6,
+    )
+
+    with pytest.raises(ExcessiveTextError):
+        service.extract(b"%PDF-1.7")
+
+
+def test_without_caps_no_output_is_rejected() -> None:
+    service = ExtractionService(
+        extractor=FakeExtractor(text="x" * 100_000, page_count=9_999), min_text_length=1
+    )
+
+    result = service.extract(b"%PDF-1.7")
+
+    assert result.extracted_text == "x" * 100_000
+    assert result.page_count == 9_999
 
 
 def test_application_layer_imports_no_infrastructure_nor_http() -> None:

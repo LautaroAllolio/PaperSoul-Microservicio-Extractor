@@ -1,4 +1,4 @@
-"""Domain exceptions for pdfextractor (plan-extractor.md § 8 failure matrix).
+"""Domain exceptions for pdfextractor (docs/tasks/plan.md § 8 failure matrix).
 
 Each subclass pins the ``status`` and the bounded, client-facing ``{"error"}``
 message that the presentation layer renders. The Extractor speaks the compact
@@ -79,3 +79,17 @@ class UnreadableError(PdfExtractorError):
 
     status = 422
     message = "no se pudo leer"
+
+
+class ExcessivePagesError(PdfExtractorError):
+    """The document has more pages than ``PDFEXTRACTOR_MAX_PAGES``."""
+
+    status = 422
+    message = "demasiadas páginas"
+
+
+class ExcessiveTextError(PdfExtractorError):
+    """The extracted text exceeds ``PDFEXTRACTOR_MAX_EXTRACTED_CHARS``."""
+
+    status = 422
+    message = "texto excesivo"
