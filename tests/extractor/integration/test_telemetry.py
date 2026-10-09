@@ -65,7 +65,7 @@ def _multipart(content: bytes, filename: str = FILENAME) -> tuple[bytes, str]:
 def _post(client: httpx.AsyncClient, content: bytes, filename: str = FILENAME) -> httpx.Response:
     body, content_type = _multipart(content, filename)
     return client.post(
-        "/api/v1/extract",
+        "/api/v1/extractions",
         content=body,
         headers={"Content-Type": content_type},
     )
@@ -81,7 +81,7 @@ async def test_request_logs_are_single_line_json_with_the_contract_fields(
     logged = next(record for record in records if record["method"] == "POST")
 
     assert logged["request_id"]
-    assert logged["path"] == "/api/v1/extract"
+    assert logged["path"] == "/api/v1/extractions"
     assert logged["status"] == 200
     assert logged["duration_ms"] > 0
     assert logged["bytes"] > 0

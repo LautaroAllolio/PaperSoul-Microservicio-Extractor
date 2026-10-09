@@ -103,7 +103,7 @@ async def test_the_extract_route_hands_the_pooled_buffer_to_the_service_without_
 
     async for client in _app_client(app):
         response = await client.post(
-            "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+            "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
 
     assert response.status_code == 200
@@ -134,11 +134,11 @@ async def test_extraction_memory_stays_proportional_to_the_upload() -> None:
 
     async for client in _app_client(app, raise_app_exceptions=False):
         warmup = await client.post(
-            "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+            "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
         before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         response = await client.post(
-            "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+            "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
         after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 

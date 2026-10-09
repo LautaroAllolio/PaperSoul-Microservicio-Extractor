@@ -223,12 +223,16 @@ async def test_saturation_answers_503_overloaded_and_ready_tracks_recovery() -> 
 
         body, content_type = multipart(b"slow")
         first = asyncio.create_task(
-            client.post("/api/v1/extract", content=body, headers={"Content-Type": content_type})
+            client.post("/api/v1/extractions", content=body, headers={"Content-Type": content_type})
         )
         await asyncio.sleep(0.05)
 
         second = await asyncio.wait_for(
-            client.post("/api/v1/extract", content=body, headers={"Content-Type": content_type}),
+            client.post(
+                "/api/v1/extractions",
+                content=body,
+                headers={"Content-Type": content_type},
+            ),
             timeout=1.5,
         )
 

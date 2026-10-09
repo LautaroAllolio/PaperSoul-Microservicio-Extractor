@@ -2,7 +2,7 @@
  * Prueba de rendimiento del microservicio `pdfextractor` (docs/report.md).
  *
  * Endpoints ejercidos (docs/api-contract.md):
- *   POST /api/v1/extract   — extracción multipart, los tres fixtures happy path
+ *   POST /api/v1/extractions — extracción multipart, los tres fixtures happy path
  *   GET  /health           — liveness, debe mantenerse 200 bajo saturación
  *   GET  /ready            — readiness, puede degradar a 503 con la puerta llena
  *   GET  /metrics          — Prometheus text, no debe caer
@@ -198,7 +198,7 @@ function requestId() {
 }
 
 function postFixture(item, tags) {
-  return http.post(`${CFG.baseUrl}/api/v1/extract`, multipartBody(item.name, item.bytes), {
+  return http.post(`${CFG.baseUrl}/api/v1/extractions`, multipartBody(item.name, item.bytes), {
     headers: {
       'Content-Type': `multipart/form-data; boundary=${BOUNDARY}`,
       'X-Request-Id': requestId(),

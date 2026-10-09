@@ -47,6 +47,15 @@ async def test_a_present_request_id_is_echoed_outbound(client) -> None:
     assert response.headers.get("x-request-id") == "abc-123"
 
 
+async def test_the_orchestrator_correlation_id_is_honoured_and_echoed(client) -> None:
+    correlation_id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    response = await client.get("/health", headers={"X-Correlation-Id": correlation_id})
+
+    assert response.status_code == 200
+    assert response.headers.get("x-correlation-id") == correlation_id
+    assert response.headers.get("x-request-id") is None
+
+
 async def test_an_absent_request_id_is_minted_and_echoed_outbound(client) -> None:
     response = await client.get("/health")
 
@@ -62,7 +71,7 @@ async def test_declared_content_length_over_the_limit_is_rejected_before_process
 
     async for client in _client_for(app):
         response = await client.post(
-            "/api/v1/extract",
+            "/api/v1/extractions",
             content=body,
             headers={"Content-Type": content_type, "Content-Length": str(len(body) + 5000)},
         )
@@ -84,7 +93,7 @@ async def test_a_job_that_exceeds_the_timeout_answers_504_timeout() -> None:
         setattr(client.app.state, EXTRACTION_SERVICE, _SlowService())
         body, content_type = multipart(b"slow payload")
         response = await client.post(
-            "/api/v1/extract", content=body, headers={"Content-Type": content_type}
+            "/api/v1/extractions", content=body, headers={"Content-Type": content_type}
         )
 
     assert response.status_code == 504

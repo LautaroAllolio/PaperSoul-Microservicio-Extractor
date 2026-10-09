@@ -318,7 +318,7 @@ function requestId() {
 }
 
 function post(body, tags) {
-  return http.post(`${CFG.baseUrl}/api/v1/extract`, body, {
+  return http.post(`${CFG.baseUrl}/api/v1/extractions`, body, {
     headers: {
       'Content-Type': `multipart/form-data; boundary=${BOUNDARY}`,
       'X-Request-Id': requestId(),
@@ -404,7 +404,7 @@ export function setup() {
   const probe = postFixture(happyFixtures[0], { name: 'setup_contract' });
   if (probe.status === 404) {
     throw new Error(
-      'POST /api/v1/extract returned 404 — the route does not exist yet. ' +
+      'POST /api/v1/extractions returned 404 — the route does not exist yet. ' +
         'Task 12 depends on Task 6 (extract endpoint) and Task 9 (backpressure/503). ' +
         'Implement those first, or rerun with LOAD_SKIP_CONTRACT_PROBE=1 to inspect the harness.',
     );
