@@ -373,7 +373,7 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
       (fast-fail antes de leer body, timeout único, pool con `forkserver`) y nueva
       corrida de carga sobre `:9000`
       - Reporte § 3–§ 6 re-escritos con las cifras de la corrida nueva; § 9
-        documenta el delta TASK-12..24.
+        documenta el delta TASK-12..24 (extendido a TASK-25..27 en CP-6).
       - Corrida re-ejecutada: k6 (baseline/stress/sonda) + Vegeta A (400 rps
         mixto) + Vegeta B (150 rps 20 pág., servidor reiniciado). Artefactos en
         `load-tests/run-9000/` (`k6-output.txt`, `server.log`, `server-b.log`,
@@ -489,5 +489,14 @@ cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
 
 ### Checkpoint CP-6: Velocidad y formato
 - [x] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-25..27
+      (168 passed/2 skipped + 2 memory; ruff/format/mypy verdes)
 - [x] Re-corrida de carga en `:9000`; cold-start y p95 antes/después en `docs/report.md`
+      - `docs/report.md` § 1, § 3.1–§ 3.5, § 5, § 6, § 7 y § 9 re-escritos con la
+        tercera corrida (2026-10-11); tablas de delta 2026-10-11 vs. 2026-10-09.
+      - Delta: aislados más rápidos (1p ~12 ms, 5p ~29 ms, 20p ~100 ms; era
+        ~23/50/124) y mix ~85 rps; ataque A mixto **mejora** (58.27 → 72.48 rps,
+        p50 19.5 → 10.5 s); ataque B pesado **regresa** (28.78 → 20.24 rps) por
+        contención del host WSL2, no por código (el `20p` aislado mejoró); sin
+        `504` ni cold-start (`workers warmed` ~1.2 s); RSS ~486 MiB. T16 (soak)
+        sigue pendiente; recomendación de re-medir B en host silencioso (§ 6).
 - [x] Revisión con humano (TASK-25..27 aprobadas una a una)

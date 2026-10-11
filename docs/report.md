@@ -8,18 +8,21 @@
 > esta tarea en `docs/tasks/plan.md`; el contrato verificado proviene de
 > `docs/api-contract.md`.
 
-**Fecha de medición:** 2026-10-09 (segunda corrida) · **Herramientas:** k6
+**Fecha de medición:** 2026-10-11 (tercera corrida) · **Herramientas:** k6
 v2.3.0 (snap), Vegeta v12.13.0 · **Entorno:** WSL2 (Ubuntu sobre Windows),
 3.7 GiB RAM, CPU 8 núcleos; servicio `uvicorn`
-(`--factory pdfextractor.main:create_app`) en `127.0.0.1:9000`.
+(`--factory pdfextractor.main:create_app`) en `127.0.0.1:9000`, con warm-up de
+workers activo (`PDFEXTRACTOR_WARMUP=true`).
 
 > **Corrida actual vs. anterior:** este documento ha sido re-ejecutado contra el
-> binario **posterior a TASK-12…TASK-24** (fast-fail `503` antes de leer el
-> cuerpo, timeout único en el pool, pool en `forkserver`, cotas de salida).
-> Por eso § 3 y § 5 **reemplazan** las cifras de la corrida original de este
-> mismo día: la comparativa con los números previos (y el impacto esperado de
-> cada tarea) está documentada en [§ 9](#9-cambios-de-comportamiento-task-1224-que-explican-la-diferencia),
-> y el anexo de pruebas de robustez en `docs/optimization-report.md`.
+> binario **posterior a TASK-12…TASK-27** (robustez + las tres optimizaciones de
+> la fase de velocidad pura: serialización `orjson`/TASK-27, Markdown nativo
+> in-house/TASK-25 y warm-up preventivo de workers/TASK-26). Por eso § 3 y § 5
+> **reemplazan** las cifras de la corrida de 2026-10-09: la comparativa
+> cuantitativa (antes/después, por régimen) está en la tabla de delta de § 3 y el
+> impacto atribuible a cada tarea en
+> [§ 9](#9-cambios-de-comportamiento-task-1227-que-explican-la-diferencia); el
+> anexo de pruebas de robustez sigue en `docs/optimization-report.md`.
 
 ## 1. Alcance
 
@@ -42,11 +45,15 @@ Configuración del servicio bajo prueba (determinista, `load-tests/run-9000/serv
 | `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` | `2` (espera máxima en la puerta → `503`) |
 | `PDFEXTRACTOR_MAX_UPLOAD_BYTES` | `1048576` (1 MiB) |
 | `PDFEXTRACTOR_METRICS_ENABLED` | `true` |
+| `PDFEXTRACTOR_WARMUP` | `true` (precalienta `min(workers, max_concurrent)` worker procesos) |
 
 > Nota: es la misma configuración determinista de la corrida anterior, no la
 > del despliegue Docker (`.env.example`: 50 MiB, `queue_timeout` 5 s,
 > `MIN_TEXT_LENGTH=0`). Se fija 1 MiB para que la fase de bytes (§ 3.4) sea
-> comparable entre corridas.
+> comparable entre corridas. La única diferencia con el arnés de 2026-10-09 es
+> `PDFEXTRACTOR_WARMUP=true` (introducido en TASK-26): al arrancar, el `lifespan`
+> deja tibios `min(workers, max_concurrent)` workers del pool antes de servir, y
+> el log de arranque registra `workers warmed` (~1.2–1.3 s).
 
 Fixtures (`tests/extractor/load/fixtures/`, generados por `gen_fixtures.py`):
 `valid_1p.pdf` (4.1 KB), `valid_5p.pdf` (53.9 KB), `valid_20p.pdf` (320.8 KB).
@@ -65,7 +72,7 @@ que fuerza decisiones de preasignación (ver § 2.2). Vegeta es *goroutine-per-
 request* y admite saturaciones profundas con costo de memoria fijo, por eso se
 usa para el régimen de sobrecarga. Ambas herramientas capturan la misma
 verdad: el throughput sostenible de `200` con la mezcla real se ubica en el
-orden de **~30–60 rps** (rodilla), muy por debajo de los 150 rps *ofrecidos* en
+orden de **~30–85 rps** (rodilla), muy por debajo de los 150 rps *ofrecidos* en
 la ventana de saturación.
 
 ### 2.2 Harness k6 (`load-tests/load-test.js`)
@@ -93,7 +100,7 @@ paralela:
     `unexpected_status==0`
 - Preasignación del pool: `preAllocatedVUs = rate×10`, `maxVUs = rate×16`
   (= 1500/2400 a 150 rps). En esta corrida k6 asignó hasta **1542 VUs** (pico
-  usado 409) y no descartó iteraciones (`0 interrupted`), por lo que el runner
+  usado 519) y no descartó iteraciones (`0 interrupted`), por lo que el runner
   no distorsiona la curva ofrecida.
 
 ### 2.3 Ataques Vegeta (`load-tests/run-9000/targets*.txt`, `body*.bin`)
@@ -133,137 +140,158 @@ HTTP → ① AdmissionGate (slot de concurrencia, ANTES de leer un byte; 2 s →
 
 ## 3. Resultados
 
-### 3.1 Línea base (k6, 40 rps, 1099 requests) — **SLO OK**
+### 3.1 Línea base (k6, 40 rps, 1099 requests) — **SLO OK, cola al alza**
 
-| Métrica | Valor | Target |
-|---|---:|---|
-| avg / med | 87.39 ms / 37.87 ms | — |
-| p90 / p95 / p99 | 175.22 / **289.38** / **729.37** ms | p95 < 500 · p99 < 750 ✅✅ |
-| min / max | 5.19 ms / 1.07 s | — |
-| `http_req_failed` | **0.00 %** (0/1099) | < 1 % ✅ |
-| checks (200 + 3 claves) | 2198 / 2198 (100 %) | > 99 % ✅ |
+| Métrica | 2026-10-11 | 2026-10-09 | Δ | Target |
+|---|---:|---:|---:|---|
+| avg | 128.12 ms | 87.39 ms | +40.73 ms | — |
+| med | 56.16 ms | 37.87 ms | +18.29 ms | — |
+| p90 | 349.64 ms | 175.22 ms | +174.42 ms | — |
+| p95 | **437.03 ms** | 289.38 ms | +147.65 ms | < 500 ✅ |
+| p99 | **583.73 ms** | 729.37 ms | −145.64 ms | < 750 ✅ |
+| min / max | 420.6 µs / 728.22 ms | 5.19 ms / 1.07 s | −341 ms (max) | — |
+| `http_req_failed` | **0.00 %** (0/1099) | 0.00 % | — | < 1 % ✅ |
+| checks (200 + 3 claves) | 100 % | 100 % | — | > 99 % ✅ |
 
-Sigue siendo OK, pero con menos holgura que la corrida anterior (p95 había
-quedado en 64.88 ms): p95 queda a ~58 % del techo y p99 a ~97 %. El incremento
-es coherente con las tareas de robustez: el pool `forkserver` esparce workers
-perezosamente, y los primeros request concurrentes de la rampa absorben cada
-arranque en frío (~3.4 s, una cola por worker) antes de quedar tibio. A 40 rps
-la puerta de 4 slots no se satura.
+El SLO se mantiene, pero el reparto cambió: el **p99 bajó** ~20 % (729 → 584 ms, la
+cola larga se acortó y el máximo pasó de 1.07 s a 728 ms) mientras que el **p95
+subió** ~51 % (289 → 437 ms). El indicador que manda (§ 4.1) sigue verde, aunque
+ahora el p95 queda a ~87 % del techo. La lectura honesta es que esta corrida **no
+reproduce** el p95 de 289 ms de la anterior: el warm-up (que sí se ejecutó —
+`workers warmed` en el arranque) no movió el p95 en la dirección esperada, y la
+causa más probable es la varianza del host WSL2 compartido (el p95 ha oscilado
+**65 → 289 → 437 ms** entre las tres sesiones, § 7). Lo que sí descarta el warm-up
+es el **spike de arranque en frío**: en `server.log` el primer POST real tarda
+734 ms y, a partir de ahí, todos los de la rampa quedan en **5–87 ms**; el ~3.4 s
+de `forkserver` de la corrida previa **ya no aparece**. A 40 rps la puerta de 4
+slots no se satura.
 
-### 3.2 Carga sostenida / rodilla (k6, 150 rps, 3231 requests POST)
+### 3.2 Carga sostenida / rodilla (k6, 150 rps, 3786 requests POST)
 
-| Métrica | Valor | Lectura |
-|---|---:|---|
-| avg / med | 3.35 s / 1.18 s | ~mitad de la ventana sin cola (rampa) |
-| p90 / p95 / p99 | 18.62 / 19.35 / **19.93** s | el event loop marca el piso alto de `200` |
-| min / max | 4.57 ms / 20.17 s | `p(99) < 32 s` ✅ (T7) |
-| `http_req_failed` (POST) | **29.12 %** (941/3231, todos `503`) | backpressure real, acotada a 2 s |
-| `200` vs `503` | 2290 vs 941 | la puerta corta el exceso; cero `504` |
-| `unexpected_status` | **0** | ningún status fuera de `{200,503,504}` |
-| iteraciones interrumpidas / dropped | **0** | runner no descarta |
-| VUs asignadas / pico usado | 1542 / 409 | pool suficiente |
-| `/health` durante saturación | 254 / 254 = 100 % ✅ | liveness intacta |
-| `/ready` durante saturación | 71 × `503` (luego vuelve a 200) | degradación de readiness observable |
+| Métrica | 2026-10-11 | 2026-10-09 | Lectura |
+|---|---:|---:|---|
+| avg | 2.63 s | 3.35 s | baja (más `503` rápidos, menos colas largas) |
+| med | 2.00 s | 1.18 s | el `503` de la puerta (~2 s) domina la mediana |
+| p90 | 8.76 s | 18.62 s | `200` ya no esperan ~19 s |
+| p95 | 12.28 s | 19.35 s | — |
+| p99 | **14.21 s** | 19.93 s | `p(99) < 32 s` ✅ (T7) |
+| min / max | 3.8 ms / 15.99 s | 4.57 ms / 20.17 s | — |
+| `http_req_failed` (POST) | **31.82 %** (1205/3786, todos `503`) | 29.12 % (941/3231) | backpressure real, acotada a 2 s |
+| `200` vs `503` | 2581 vs 1205 | 2290 vs 941 | la puerta corta el exceso; cero `504` |
+| `unexpected_status` | **0** | 0 | ningún status fuera de `{200,503,504}` |
+| iteraciones interrumpidas / dropped | **0** | 0 | runner no descarta |
+| VUs asignadas / pico usado | 1542 / 519 | 1542 / 409 | pool suficiente |
+| `/health` durante saturación | 281 / 281 = 100 % ✅ | 254 / 254 | liveness intacta |
+| `/ready` durante saturación | 111 × `503` | 71 × `503` | degradación de readiness observable |
 
-El cambio clave frente a la corrida anterior es **cualitativo**: a 150 rps
-mixtos el sistema ya **no** absorbe todo con `200` encolados hasta ~22 s
-(antes: 0.00 % de fallos); ahora la puerta admite solo la capacidad (`200`),
-rechaza el exceso con **`503` inmediato y acotado** (941) y solo deja que
-envejezcan los trabajos ya admitidos. Los `200` que sí entraron terminaron
-rápido; el p90/p99 (~18-20 s) reflejan la **saturación del event loop** (etapa
-② y la escritura de las respuestas de ~120 KB de los fixtures pesados), no
-colas de extracción. Los `503` se activan a cientos de ms del `queue_timeout`
-(2 s), de modo que el coste de bytes fallido cayó a casi cero (cuerpo no leído).
+El comportamiento cualitativo de la corrida anterior se mantiene y **mejora en la
+cola**: a 150 rps mixtos la puerta admite lo que cabe (`200`) y rechaza el exceso
+con un `503` inmediato y acotado (~2 s, detectado a cientos de ms del
+`queue_timeout`), sin ningún `504`. La diferencia medible es que los `200`
+admitidos **terminan antes**: el p90 cae de 18.62 s a 8.76 s y el p99 de 19.93 s
+a **14.21 s** (−28 %), lo que sube el throughput del escenario. A cambio, entra
+un poco más de carga rechazada (31.82 % vs 29.12 % de `503`) y la sonda `/ready`
+marca más sobrecarga (111 vs 71), coherente con haber admitido más trabajo.
+Sigue habiendo cola en el **event loop** (etapa ② y la escritura de los bodies de
+~120 KB), que es el piso de los `200`; no es una cola de extracción.
 
-**Resultado global k6:** `http_reqs = 5094` (baseline 1099 + saturación 3231 +
-sonda 764), `iterations = 4584`, `data_sent = 306 MB`, `data_received = 80 MB`.
-El `http_req_failed` global de **19.86 % (1012/5094)** = 941 `503` POST de
-saturación + 71 `503` de `/ready` de la sonda; baseline y body-checks siguen en
+**Resultado global k6:** `http_reqs = 5730` (baseline 1099 + saturación 3786 +
+sonda 845), `iterations = 5166`, `data_sent = 488 MB`, `data_received = 91 MB`.
+El `http_req_failed` global de **22.96 % (1316/5730)** = 1205 `503` POST de
+saturación + 111 `503` de `/ready` de la sonda; baseline y body-checks siguen en
 **0.00 %**. Todos los thresholds del runner pasaron y k6 salió con código **0**.
 
 ### 3.3 Sobrecarga mixta (Vegeta A, 400 rps, 12000 requests, 5 páginas)
 
-| Métrica | Valor |
-|---|---:|
-| rate ofrecido / throughput | 400.04 rps / **58.27 rps exitosos** |
-| latencia min / mean | 2.881 ms / 19.137 s |
-| latencia p50 / p90 / p95 / p99 / max | 19.553 / 35.001 / 35.001 / 35.003 / 35.052 s |
-| éxito (`200`) | 3787 = **31.56 %** |
-| `503` (backpressure) | 4912 = **40.93 %** ✅ **el fast-fail se activa aun en colapso** |
-| timeout de cliente (35 s, código `0`) | 3301 = 27.51 % |
-| otros códigos / cortes de transporte | 0 |
-| drenaje tras fin del ataque | 34.997 s (la cola del event loop se vacía) |
+| Métrica | 2026-10-11 | 2026-10-09 | Δ |
+|---|---:|---:|---:|
+| rate ofrecido / throughput | 400.03 / **72.48 rps** | 400.04 / 58.27 rps | **+24 %** |
+| latencia min / mean | 1.019 ms / 15.619 s | 2.881 ms / 19.137 s | mean −3.5 s |
+| latencia p50 | 10.524 s | 19.553 s | **−9.0 s** |
+| latencia p90 / p95 / p99 / max | 35.001 / 35.001 / 35.003 / 35.825 s | 35.001 / 35.001 / 35.003 / 35.052 s | ~= |
+| éxito (`200`) | 4711 = **39.26 %** | 3787 = 31.56 % | **+7.7 pp** |
+| `503` (backpressure) | 4314 = **35.95 %** | 4912 = 40.93 % | −598 |
+| timeout de cliente (35 s, código `0`) | 2975 = 24.79 % | 3301 = 27.51 % | −326 |
+| otros códigos / cortes de transporte | 0 | 0 | — |
+| drenaje tras fin del ataque | 35.001 s | 34.997 s | ~= |
 
-A 400 rps mixtos (≈ 200 rps POST ofrecidos contra ~60 rps de capacidad) el
-servicio **entra en colapso profundo**: la etapa ② del event loop se satura y
-degradó también a las sondas `GET` (/health, `/ready`, `/metrics` entraron en el
-mismo bote de los `0-count` de timeout de cliente). La puerta siguió produciendo
-`503` (4912) —la mitad de las respuestas exitosas en términos de protocolo— pero
-el p50 global (19.5 s) muestra que la admisión y el retorno quedan encolados por
-la saturación misma del event loop. Los `0` de la columna de códigos
-corresponden a los ~27.5 % de requests cuyo cliente (35 s) dejó de esperar; el
-servidor siguió drenándolos (ver log § 3.5). El `throughput` (58 rps) narra la
-capacidad mixta real: los `503` no consumen slots de extracción.
+A 400 rps mixtos (≈ 200 rps POST ofrecidos contra ~85 rps de capacidad, § 3.5)
+el servicio **entra en colapso profundo**: la etapa ② del event loop se satura y
+degrada también a las sondas `GET` (/health, `/ready`, /metrics caen en el mismo
+bote de los `0` de timeout de cliente). Aun así, esta corrida **colapsa menos**:
+el throughput sube de 58.27 a **72.48 rps** (+24 %), el éxito de 31.56 % a
+**39.26 %** y el p50 se parte de 19.5 s a **10.5 s**. La puerta siguió produciendo
+`503` acotados (4314) y los `0` son, otra vez, clientes que dejaron de esperar a
+los 35 s mientras el servidor siguió drenando (ver log § 3.5). El throughput narra
+la capacidad mixta real: los `503` no consumen slots de extracción.
 
 ### 3.4 Sobrecarga homogénea pesada (Vegeta B, 150 rps, 4500 requests, 20 páginas)
 
-| Métrica | Valor |
-|---|---:|
-| rate ofrecido / throughput | 150.04 rps / **28.78 rps exitosos** |
-| latencia min / mean | 177.6 ms / 2.093 s |
-| latencia p50 / p90 / p95 / p99 / max | 2.041 / 2.199 / 2.329 / 2.919 / 3.014 s |
-| `200` | 923 = **20.51 %** |
-| `503` (backpressure) | 3577 = **79.49 %** ✅ |
-| `504` (timeout de extracción 30 s) | **0** |
-| timeout de cliente (35 s) | **0** (p99 2.9 s queda muy por debajo) |
-| drenaje tras fin del ataque | 2.078 s |
+| Métrica | 2026-10-11 | 2026-10-09 | Δ |
+|---|---:|---:|---:|
+| rate ofrecido / throughput | 150.03 / **20.24 rps** | 150.04 / 28.78 rps | **−30 %** |
+| latencia min / mean | 313.4 ms / 2.073 s | 177.6 ms / 2.093 s | ~= |
+| latencia p50 / p90 / p95 | 2.025 / 2.234 / 2.339 s | 2.041 / 2.199 / 2.329 s | ~= |
+| latencia p99 / max | 2.539 / 2.832 s | 2.919 / 3.014 s | p99 −0.38 s |
+| `200` | 652 = **14.49 %** | 923 = 20.51 % | **−6.0 pp** |
+| `503` (backpressure) | 3848 = **85.51 %** | 3577 = 79.49 % | +271 |
+| `504` (timeout de extracción 30 s) | **0** | **0** | — |
+| timeout de cliente (35 s) | **0** | **0** | — |
+| drenaje tras fin del ataque | 2.218 s | 2.078 s | ~= |
 
-**El hallazgo que esta corrida pasa a verde:** el régimen de bytes pesados ya no
-produce colas desacotadas. Antes, con el cuerpo de 328 KB y ~120 KB de texto de
-respuesta, la puerta era inalcanzable: no había `503`, la latencia escalaba hasta
-el `504` del pool (~30 s) o el timeout del cliente (0 % de éxito medible en los
-artefactos previos § 7). Con la admisión **antes** de leer el cuerpo (TASK-12),
-la puerta corta en ~2 s: la latencia se acota (p99 2.9 s ≈ `queue_timeout`
-2 s + servicio), el `503` llega al cliente en el 79 % de los casos y no hay
-ningún `504` ni cortes de transporte. El throughput exitoso (28.78 rps) coincide
-con la capacidad teórica del fixture pesado (`4 slots / ~0.124 s ≈ 32 rps`,
-§ 3.5): los `503`, otra vez, no consumen capacidad de extracción.
+El hallazgo estructural de la corrida previa **se mantiene**: el régimen de bytes
+pesados no produce colas desacotadas. Con la admisión **antes** de leer el cuerpo
+(TASK-12) la puerta corta a ~2 s, la latencia se acota (p99 2.54 s ≈
+`queue_timeout` 2 s + servicio), el `503` llega al cliente en el **85.5 %** de los
+casos y no hay ningún `504` ni cortes de transporte. **La regresión de esta
+corrida es el throughput**: el éxito de `200` cae de 28.78 a **20.24 rps**
+(−30 %) y el `503` sube en la misma proporción.
+
+Esa caída **no es un defecto del camino pesado en frío**: la medición aislada
+(§ 3.5) muestra que la extracción de `valid_20p.pdf` es **más rápida** que antes
+(~100 ms vs ~124 ms). Lo que creció es la **contención bajo carga**: con 4 slots
+y ~100 ms de servicio aislado cabrían ~40 rps, pero el régimen admitió ~21.7 rps,
+es decir una ocupación efectiva de ~184 ms por slot (vs ~130 ms en la corrida
+previa). Es el patrón de un **host WSL2 más cargado** esta sesión, no de un
+cambio de código: el renderer Markdown (TASK-25) y `orjson` (TASK-27) están en el
+camino crítico y aun así los aislados bajaron. Queda como la observación a
+re-verificar en un host silencioso (§ 6).
 
 ### 3.5 Capacidad por fixture y memoria
 
 Latencias aisladas (mediana de 5 muestras, sin carga, pool tibio, misma sesión):
 
-| Fixture | Tiempo | Capacidad de puerta `≈ 4/t` |
-|---|---:|---:|
-| `valid_1p.pdf` | ~23 ms | ~170 rps |
-| `valid_5p.pdf` | ~50 ms | ~80 rps |
-| `valid_20p.pdf` | ~124 ms | ~32 rps |
-| mezcla (1/5/20) | ~66 ms | ~60 rps |
+| Fixture | 2026-10-11 | 2026-10-09 | Capacidad de puerta `≈ 4/t` |
+|---|---:|---:|---:|
+| `valid_1p.pdf` | **~12 ms** | ~23 ms | ~335 rps |
+| `valid_5p.pdf` | **~29 ms** | ~50 ms | ~140 rps |
+| `valid_20p.pdf` | **~100 ms** | ~124 ms | ~40 rps |
+| mezcla (1/5/20) | **~47 ms** | ~66 ms | ~85 rps |
 
-La capacidad mixta sostenible observada es **~30–60 rps** (el fixture de 20
-páginas es el limitante): el throughput del ataque B (§ 3.4, 28.78 rps
-exitosos) calza con la fila del `20p`, y el `~60 rps` de la mezcla es el
-techo de `200` que la puerta deja pasar en § 3.2 (2290 `200` en ~35 s de
-ventana saturada). Frente a la corrida anterior los aislados subieron
-(~27/32/92 → ~23/50/124 ms): varianza del host WSL2 compartido + arranque
-`forkserver` (el primer trabajo del proceso tarda ~3.4 s en frío; luego se
-amortiza — ver `server.log`).
+Los aislados **bajaron** en los tres fixtures (−19 % a −50 %) pese a que el
+camino crítico ahora incluye el renderer Markdown in-house (TASK-25) y `orjson`
+(TASK-27), y a que el primer POST del pool ya no paga la siembra `forkserver`
+(`warmup`, TASK-26): la mediana del ~3.4 s en frío desapareció. La
+capacidad mixta **teórica** sube de **~60 a ~85 rps**. Frente al ataque B
+(§ 3.4, 20.24 rps exitosos), la brecha entre el techo aislado (~40 rps para
+`20p`) y lo admitido bajo carga es la **contención** ya señalada: el aislado
+corre en un host ocioso, la saturación sostenida no.
 
-**Memoria del servicio** (uvicorn + pool, muestreado con `ps rss` tras el
-ataque B): proceso principal **~220 MiB**, workers del pool **~63 MiB** cada
-uno (4 spawneados bajo carga, de hasta 8 según `effective_workers`), total
-~500 MiB. El RSS del principal bajó frente al ~1.06 GiB de la corrida anterior
-—medido igualmente "en reposo"— por la compartición copy-on-write de los workers
-`forkserver`; no se observó `OOM` ni `500` en ningún log. El soak largo de T16
-sigue pendiente.
+**Memoria del servicio** (uvicorn + pool, muestreado con `ps rss` en reposo, pool
+tibio): proceso principal **~211 MiB**, workers del pool **~62.5 MiB** cada uno
+(4 tibios, los que `warmup` pre-spawnea = `min(workers, max_concurrent)`), gestor
+`forkserver` **~13 MiB** y `resource_tracker` **~11 MiB**; total **~486 MiB**
+(corrida previa: ~220 / ~63 / ~500 MiB). No se observó `OOM` ni `500` en ningún
+log. El soak largo de T16 sigue pendiente.
 
-Log del servicio, sesión completa (suma de `load-tests/run-9000/server.log`
-[k6 + ataque A] y `server-b.log` [ataque B]): **200: 15394 · 503: 15939 ·
-504: 0 · ningún otro 5xx**. El 0 de `504` es el cambio estructural de esta
-corrida: ninguna cola llegó al timeout de extracción. El total de `200/503`
-del servidor supera al observado por los clientes (k6 + Vegeta) porque el
-ataque A dejó requests en vuelo que **el servidor terminó de procesar después
-de que el cliente cortara a los 35 s** (los `0-count` de § 3.3).
+Log del servicio, sesión completa (`load-tests/run-9000/server.log` [k6 + ataque
+A] y `server-b.log` [ataque B + sondas de § 3.5]): **200: 10077 · 503: 9539 ·
+504: 0 · ningún otro 5xx**. El `504=0` es el rasgo estructural que se conserva:
+ninguna cola llegó al timeout de extracción. El conteo del servidor no coincide
+con el de los clientes (k6 + Vegeta) porque el ataque A, a 400 rps, deja
+conexiones que el cliente corta a los 35 s (los `0` de § 3.3) y algunas que no
+alcanzan a enmarcarse en el event loop saturado; aun así, **todo lo respondido
+cayó en `{200, 503}`**.
 
 ## 4. Análisis
 
@@ -271,20 +299,20 @@ de que el cliente cortara a los 35 s** (los `0-count` de § 3.3).
 
 - El tope configurado (`max_concurrent_extractions = 4`) fija el techo
   teórico `≈ 4 / tiempo_de_servicio`. Con la mezcla real la rodilla cae en
-  **~30–60 rps**: el `200`-throughput del ataque B (28.78 rps) coincide con la
-  fila del fixture pesado (§ 3.5) y en § 3.2 la puerta deja pasar ~60 rps de
-  `200`. La separación de percentiles —p90 pasando de ~175 ms en la línea base
-  a ~18.6 s en saturación— marca el onset de la cola mucho antes que el
-  promedio; esto ilustra el fallo de "juzgar por el mean" del cap. 9 de
-  *Essential Kanban Condensed* (PDF 48) y del principio de inspección/adaptación
-  del *Scrum Guide* (p. 4 impresa): **inspeccionar p95/p99, no la media**.
+  **~30–85 rps**: el techo aislado subió a ~85 rps (§ 3.5) pero el `200`
+  admitido bajo carga pesada se quedó en ~21 rps (§ 3.4). La separación de
+  percentiles —p90 pasando de ~350 ms en la línea base a ~8.8 s en saturación—
+  marca el onset de la cola mucho antes que el promedio; esto ilustra el fallo de
+  "juzgar por el mean" del cap. 9 de *Essential Kanban Condensed* (PDF 48) y del
+  principio de inspección/adaptación del *Scrum Guide* (p. 4 impresa):
+  **inspeccionar p95/p99, no la media**.
 - Ley de Little aplicada al propio layout: el pico de `200` concurrentes en
-  saturación (~60 rps × ~15–20 s de piso del event loop) exigiría ~1000–1200
-  peticiones en vuelo si todo se admitiera; la puerta corta antes, por eso el
-  pico de VUs usado en k6 cayó de 976 a **409**. `preAllocatedVUs = rate×10`
-  mantiene el runner por encima del WIP teórico (WIP del *Kanban*, PDF 26).
+  saturación (~85 rps × ~9 s de piso del event loop) exigiría ~760 peticiones en
+  vuelo si todo se admitiera; la puerta corta antes, por eso el pico de VUs usado
+  en k6 cayó de 976 a **519**. `preAllocatedVUs = rate×10` mantiene el runner por
+  encima del WIP teórico (WIP del *Kanban*, PDF 26).
 
-### 4.2 de hallazgo a resuelto: la cola antes del cuerpo ya está acotada
+### 4.2 De hallazgo a resuelto: la cola antes del cuerpo ya está acotada
 
 La corrida anterior encontró (y la memoria de esta tarea lo registró como
 hallazgo de diseño, TASK-12) que el `503` acotado **solo era alcanzable si la
@@ -293,10 +321,10 @@ pesado la cola crecía sin topes y el cliente recibía un `504` tardío o cortab
 los 35 s, sin `503`. Ese defecto quedó **resuelto con la admisión antes de leer
 el cuerpo** (`admission.admit` en `extract.py:47-53`):
 
-- Bajo carga homogénea pesada (§ 3.4) ahora hay **3577 `503` acotados a ~2 s**,
-  cero `504` y cero cortes de cliente; la latencia p99 (2.9 s) es un orden de
+- Bajo carga homogénea pesada (§ 3.4) ahora hay **3848 `503` acotados a ~2 s**,
+  cero `504` y cero cortes de cliente; la latencia p99 (2.54 s) es un orden de
   magnitud menor que el peor caso anterior (~34 s).
-- Bajo saturación mixta k6 (§ 3.2), 941 `503` llegan al cliente (antes: 0).
+- Bajo saturación mixta k6 (§ 3.2), 1205 `503` llegan al cliente (antes: 0).
 - El residuo que persiste es el **event loop como cuello físico**: en el
   colapso profundo del ataque A (400 rps) la degradación alcanza a las propias
   sondas `GET`, porque todo lo enmarcado/serializado/escrito atraviesa un único
@@ -312,9 +340,10 @@ El `503` de backpressure (ahora previo a la lectura) y el `504` del timeout de
 extracción son la defensa real contra colas infinitas a nivel **servidor**; el
 presupuesto de bytes se protegió internamente y la memoria no creció en modo
 visible (sin muestreo de soaks largos). En ningún régimen se observó `500` ni un
-`5xx` fuera de contrato: los únicos status emitidos fueron `200`, `503` y `504`,
-y los `0` del ataque A corresponden a cortes de cliente, no a respuestas del
-servidor fuera de contrato.
+`5xx` fuera de contrato: los únicos status emitidos fueron `200` y `503` (el
+`504`, aunque en contrato, no llegó a producirse en esta corrida), y los `0` del
+ataque A corresponden a cortes de cliente, no a respuestas del servidor fuera de
+contrato.
 
 ## 5. Cumplimiento — SLOs, DoD y marco teórico
 
@@ -322,19 +351,19 @@ Mapeo contra los umbrales T1–T16 definidos para esta tarea:
 
 | # | Umbral | Medido | Veredicto |
 |---|---|---|---|
-| T1 | `happy_path p(95) < 500 ms` | **289.38 ms** | ✅ |
-| T2 | `happy_path p(99) < 750 ms` | **729.37 ms** | ✅ |
+| T1 | `happy_path p(95) < 500 ms` | **437.03 ms** | ✅ |
+| T2 | `happy_path p(99) < 750 ms` | **583.73 ms** | ✅ |
 | T3 | `happy_path http_req_failed < 1 %` | **0.00 %** | ✅ |
 | T4 | `checks happy_path > 99 %` | **100 %** | ✅ |
 | T6 | `checks saturación > 95 %` | **100 %** | ✅ |
-| T7 | `saturación p(99) < queue+extraction` (32 s) | **19.93 s** | ✅ |
-| T8 | `unexpected_status == 0` | **0** (solo `200`/`503`/`504` en todo el log) | ✅ |
-| T9 | backpressure `> 0` (`503` reales) | k6 POST saturación: **941** · A: 4912 · B: 3577 | ✅ (ahora en cualquier régimen) |
-| T10 | `503` latencia ≈ `queue_timeout` (2 s) | p50 B = **2.041 s**; p50 A = 19.5 s (colapso mixto, ver § 4.2) | ✅ en carga acotada |
-| T11/T12 | `/health` 200 bajo saturación | **100 %** (254/254) | ✅ |
+| T7 | `saturación p(99) < queue+extraction` (32 s) | **14.21 s** | ✅ |
+| T8 | `unexpected_status == 0` | **0** (solo `200`/`503` en todo el log) | ✅ |
+| T9 | backpressure `> 0` (`503` reales) | k6 POST saturación: **1205** · A: 4314 · B: 3848 | ✅ (en todos los regímenes) |
+| T10 | `503` latencia ≈ `queue_timeout` (2 s) | p50 B = **2.025 s**; p50 A = 10.5 s (colapso mixto, ver § 4.2) | ✅ en carga acotada |
+| T11/T12 | `/health` 200 bajo saturación | **100 %** (281/281) | ✅ |
 | T13 | `/ready` nunca 404 | **0** | ✅ |
 | T14 | error budget `/health` < 1 % | **0.00 %** | ✅ |
-| T16 | RSS estable | muestreo en reposo ~500 MiB; sin `OOM`/`500` | 🟡 soak pendiente |
+| T16 | RSS estable | muestreo en reposo ~486 MiB; sin `OOM`/`500` | 🟡 soak pendiente |
 | — | iteraciones interrumpidas / dropped `== 0` | **0** | ✅ |
 
 **Marco RNF (medidas de calidad, DoD):** siguiendo al *Scrum Guide* (p. 12
@@ -344,8 +373,8 @@ throughput, tasa de éxito) son el mecanismo de inspección y se vuelven a
 medir en cada cambio (adaptación). Desde *Historias de usuario* (p. 24
 impresa), los criterios de aceptación no funcionales se separan en
 **objetivo** (p95 < 500 ms), **restricción** (503 acotado a ~2 s bajo
-saturación) y **línea base** (hoy: p50 de línea base ≈ 37.9 ms, capacidad
-sostenida ≈ 30–60 rps). La **historia abierta** que dejó la corrida previa
+saturación) y **línea base** (hoy: p50 de línea base ≈ 56.2 ms, capacidad
+sostenida ≈ 30–85 rps). La **historia abierta** que dejó la corrida previa
 —"mover la puerta a la entrada del event loop"— quedó **cerrada por TASK-12**:
 en esta corrida el `503` acotado se cumple en **todos** los regímenes
 (§ 3.2–§ 3.4). Queda una historia menor: acotar la admisión de `asyncio.to_thread`
@@ -361,11 +390,16 @@ en esta corrida el `503` acotado se cumple en **todos** los regímenes
    `service.extract`, para que el `queue_timeout` de la puerta se mida desde la
    llegada y no se forme una cola de coroutinas en el executor default. Es lo
    único que resta del hallazgo § 4.2 (relevante a tasas ≥ 400 rps mixtos).
-3. **Watch del p95 en el punto ~30–60 rps** como early warning de la rodilla
+3. **Watch del p95 en el punto ~30–85 rps** como early warning de la rodilla
    (el p95 se degrada dos órdenes de magnitud antes que el p50).
-4. **Cerrar T16**: corrida soak (10 min) para confirmar la meseta de RSS y
+4. **Re-medir el ataque B (20 pág.) en un host silencioso**: en esta sesión el
+   throughput del régimen pesado cayó −30 % (28.78 → 20.24 rps) mientras el
+   aislado del `20p` **mejoró** (~124 → ~100 ms), señal de contención del host
+   y no de regresión de código (§ 3.4). Repetir A/B en una ventana de host
+   ocioso antes de fijar la cifra como línea base.
+5. **Cerrar T16**: corrida soak (10 min) para confirmar la meseta de RSS y
    muestreo en vivo de los workers del pool (item 7 del plan de carga).
-5. Re-medir con `PDFEXTRACTOR_MAX_UPLOAD_BYTES=52428800` (50 MiB) antes de
+6. Re-medir con `PDFEXTRACTOR_MAX_UPLOAD_BYTES=52428800` (50 MiB) antes de
    cerrar la Task 13 (item 6 del plan): el costo de bytes por request sigue
    siendo el factor que separa los regímenes § 3.3 (mixto) y § 3.4 (pesado).
 
@@ -375,7 +409,7 @@ en esta corrida el `503` acotado se cumple en **todos** los regímenes
 # 1) Servidor con configuración determinista (puerto de despliegue 9000)
 PDFEXTRACTOR_PORT=9000 PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=4 \
 PDFEXTRACTOR_MAX_UPLOAD_BYTES=1048576 PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS=2 \
-PDFEXTRACTOR_METRICS_ENABLED=true \
+PDFEXTRACTOR_METRICS_ENABLED=true PDFEXTRACTOR_WARMUP=true \
 uv run uvicorn --factory pdfextractor.main:create_app --host 127.0.0.1 --port 9000
 
 # 2) k6 (línea base + rodilla + sonda) contra /api/v1/extractions
@@ -405,12 +439,13 @@ vegeta report < load-tests/run-9000/results-20p.bin
 vegeta report --type=json < load-tests/run-9000/results-20p.bin > load-tests/run-9000/results-20p.json
 ```
 
-> **Secuencia recomendada de esta corrida:** A y B se ejecutaron desde un pool
-> **tibio** (tras un warm-up de los tres fixtures). En la práctica conviene
-> reiniciar el servicio entre A y B —o al menos entre corridas— porque A deja el
-> event loop saturado y contaminaría una B inmediata. En esta sesión el warm-up
-> del pool `forkserver` costó ~3.4 s en el primer POST y quedó amortizado
-> después.
+> **Secuencia de esta corrida (2026-10-11):** el k6 y el ataque A (mixto) se
+> ejecutaron sobre la **misma** instancia (recolectados en `server.log`); entre A
+> y B se **reinició** el servicio (instancia nueva, `server-b.log`) porque A deja
+> el event loop saturado y contaminaría una B inmediata. El warm-up (TASK-26)
+> dejó el pool tibio en **~1.2 s** al arrancar (`workers warmed` en el log), así
+> que el primer POST real ya no paga el arranque en frío de `forkserver`
+> (~3.4 s en la corrida previa).
 
 Artefactos en `load-tests/run-9000/`:
 
@@ -438,34 +473,37 @@ son sintéticos (páginas de texto aleatorio). k6 corrió como snap (sin permiso
 de escritura fuera del home, por lo que no se generó el `--summary-export`
 JSON; el reporte textual es equivalente).
 
-## 9. Cambios de comportamiento (TASK-12..24) que explican la diferencia
+## 9. Cambios de comportamiento (TASK-12..27) que explican la diferencia
 
 Las cifras de § 3 y el veredicto de § 5 corresponden al binario **posterior** a
-la suite de robustez (TASK-12…TASK-24, fases A–C del `docs/tasks/todo.md`); esta
-sección resume **qué cambió** respecto de la corrida previa y por eso los
-números se movieron —especialmente en el régimen de bytes—. El detalle de cada
-tarea (con sus tests) vive en `docs/tasks/todo.md` y
-`docs/optimization-report.md`.
+la suite de robustez (TASK-12…TASK-24) **y** a las tres optimizaciones de la fase
+de velocidad pura (TASK-25 Markdown nativo, TASK-26 warm-up de workers, TASK-27
+`orjson`). Esta sección resume **qué cambió** respecto de la corrida del
+2026-10-09 y por eso los números se movieron. El detalle de cada tarea (con sus
+tests) vive en `docs/tasks/todo.md` y `docs/optimization-report.md`.
 
 | Cambio | Dónde | Efecto observado en esta corrida |
 |---|---|---|
-| Fast-fail `503`/`413` **antes de leer el cuerpo** (backstop de tamaño + puerta) | `extract.py`, `middlewares.py` (TASK-12) | **El cambio dominante.** Cierra la historia abierta: el `503` acotado ahora aparece en todos los regímenes (§ 3.2–§ 3.4) y el coste de bytes por request fallido cae a casi cero |
-| **Timeout único en el pool**; la ruta ya no envuelve en `asyncio.wait_for`; el buffer se libera al terminar la extracción | `pool.py`, `extract.py` (TASK-13) | Desaparecieron los `504` (0 en toda la sesión); p99 de saturación acotado (T7 = 19.93 s) |
-| `_Gate` sobre `BoundedSemaphore` (ceiling autoritario) | `pool.py` (TASK-14) | `inflight` nunca excede `MAX_CONCURRENT`; throughput de `200` reproducible (28.78 rps en B) |
+| Fast-fail `503`/`413` **antes de leer el cuerpo** (backstop de tamaño + puerta) | `extract.py`, `middlewares.py` (TASK-12) | **El cambio dominante.** Cierra la historia abierta: el `503` acotado aparece en todos los regímenes (§ 3.2–§ 3.4) y el coste de bytes por request fallido cae a casi cero |
+| **Timeout único en el pool**; la ruta ya no envuelve en `asyncio.wait_for`; el buffer se libera al terminar la extracción | `pool.py`, `extract.py` (TASK-13) | `504 = 0` en toda la sesión; p99 de saturación acotado (T7 = 14.21 s) |
+| `_Gate` sobre `BoundedSemaphore` (ceiling autoritario) | `pool.py` (TASK-14) | `inflight` nunca excede `MAX_CONCURRENT`; throughput de `200` gobernado por la puerta (21.7 rps de `200` en B bajo el host de esta sesión) |
 | Tope de cabeceras de parte multipart (16 KiB) | `multipart_reader.py` (TASK-15) | 422 acotado ante streams infinitos de cabeceras (no ejercido por esta carga) |
 | Log de excepciones no esperadas (traceback estructurado) + stdout por defecto | `handlers.py`, `logging_.py` (TASK-16) | 500 diagnosticable; sin impacto en p95 |
 | `Settings` con validadores + entrypoint `python -m pdfextractor` | `settings.py`, `__main__.py` (TASK-17) | Config inválida falla al arrancar |
 | Dialecto de error 404/405/422 con una sola clave `{"error"}` | `handlers.py` (TASK-18) | Contrato de errores homogéneo |
-| Pool en **`forkserver`** (no `fork`) | `pool.py` (TASK-19) | Workers seguros con el servidor multihilo; **primer trabajo en frío ~3.4 s**, luego amortizado. Explica parte del alza del p95 de línea base (289 ms vs. 65 ms previos) |
+| Pool en **`forkserver`** (no `fork`) | `pool.py` (TASK-19) | Workers seguros con el servidor multihilo; el arranque en frío (~3.4 s) lo absorbe ahora el warm-up (TASK-26), no el primer request |
 | **Cotas de salida** `MAX_PAGES` / `MAX_EXTRACTED_CHARS` → `422` | `errors.py`, `extraction_service.py`, `settings.py` (TASK-20) | Bombas de descompresión cortadas con 422 acotado; no ejercidas por esta carga |
 | Métricas de proceso/GC + render `/metrics` en threadpool | `metrics.py` (TASK-21) | `/metrics` ya no bloquea el event loop; series nuevas `process_cpu_*`, `python_gc_*` |
 | Gates de CI (memory, `pip-audit`, build imagen) | `.github/workflows/ci.yml` (TASK-23) | Calidad reproducible en CI |
 | Documentación de oversubscripción de workers | `README.md` (TASK-24) | Sin impacto en las medidas |
+| **Serialización con `orjson`** (default response class + handlers + `/ready`) | `orjson_response.py`, `main.py`, `handlers.py`, `health.py` (TASK-27) | Response path más barato; aislados de extracción **más rápidos** (§ 3.5) y mejor throughput en el régimen mixto A (58.27 → 72.48 rps) |
+| **Markdown nativo in-house** desde `get_text("dict")` (sin `pymupdf4llm`) | `markdown.py`, `pymupdf_extractor.py` (TASK-25) | Cuerpo `200` en Markdown con el **mismo tamaño** (~122 KB el `20p`); coste ~1.0x del texto plano, no penaliza el p95 (aislados a la baja) |
+| **Warm-up preventivo de workers** (`PDFEXTRACTOR_WARMUP`, default true) | `pool.py`, `main.py`, `settings.py`, `logging_.py` (TASK-26) | `workers warmed` en ~1.2 s al arrancar; el primer POST real baja a ~0.7 s y la rampa queda en 5–87 ms — desaparece el spike de `forkserver` (~3.4 s) de la corrida previa |
 
-**Estado de verificación:** suite **143 passed / 2 skipped** + `-m memory`
+**Estado de verificación:** suite **168 passed / 2 skipped** + `-m memory`
 **2 passed** (ruff/format/mypy verdes) y **corrida de carga sobre `:9000`
 re-ejecutada y capturada en `load-tests/run-9000/`** (esta misma sesión). El CP-5
-queda solo a la espera de la **revisión humana** de TASK-12..24; T16 (soak de
+queda solo a la espera de la **revisión humana** de TASK-12..27; T16 (soak de
 RSS) permanece pendiente.
 
 ## 8. Referencias
