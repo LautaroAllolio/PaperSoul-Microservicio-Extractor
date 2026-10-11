@@ -54,13 +54,13 @@ se aceptan otros campos; el conteo de partes se resuelve con el primer `file`.
 
 ```json
 {
-  "extracted_text": "Texto plano extraído del PDF...",
+  "extracted_text": "Texto en **Markdown** extraído del PDF...",
   "extraction_method": "pymupdf",
   "page_count": 4
 }
 ```
 
-- `extracted_text`: texto plano del documento (≥ `PDFEXTRACTOR_MIN_TEXT_LENGTH` caracteres, ≤ `PDFEXTRACTOR_MAX_EXTRACTED_CHARS`).
+- `extracted_text`: contenido del documento en **Markdown** (GitHub-flavoured) generado por el renderer propio (`infrastructure/extraction/markdown.py`) a partir de `page.get_text("dict")`: encabezados (`#`..`###`) por tamaño de fuente, énfasis `**negrita**`/`*cursiva*` por flags del span, ítems de lista (`-`/`1.`), y párrafos/páginas separados por línea en blanco. Sin tablas ni OCR. (≥ `PDFEXTRACTOR_MIN_TEXT_LENGTH` caracteres, ≤ `PDFEXTRACTOR_MAX_EXTRACTED_CHARS`).
 - `extraction_method`: motor de extracción (hoy siempre `pymupdf`).
 - `page_count`: páginas del PDF (≤ `PDFEXTRACTOR_MAX_PAGES`).
 

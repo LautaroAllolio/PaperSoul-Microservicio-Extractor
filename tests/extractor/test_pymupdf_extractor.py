@@ -59,10 +59,10 @@ def blank_pdf() -> bytes:
         return document.tobytes()
 
 
-def test_valid_pdf_returns_exact_text_and_page_count(valid_pdf: bytes) -> None:
-    text, page_count = PyMuPDFExtractor().extract(valid_pdf)
+def test_valid_pdf_returns_exact_markdown_and_page_count(valid_pdf: bytes) -> None:
+    markdown, page_count = PyMuPDFExtractor().extract(valid_pdf)
 
-    assert text == "Hello PaperSoul\nSecond page\n"
+    assert markdown == "Hello PaperSoul\n\nSecond page"
     assert page_count == 2
 
 

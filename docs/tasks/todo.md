@@ -382,10 +382,12 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
 
 ## Paso 6: Velocidad pura y Markdown nativo
 
-Decisiones acordadas con el humano: Markdown vía `pymupdf4llm` (get_text("markdown")
-no existe en PyMuPDF 1.28.2); toggle `PDFEXTRACTOR_WARMUP` (default true); `orjson`
-en default response class + handlers + `/ready`. Flujo TDD estricto (rojo → verde) +
-pausa obligatoria tras cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
+Decisiones acordadas con el humano: Markdown vía renderer **propio** sobre
+`get_text("dict")` (`get_text("markdown")` no existe en PyMuPDF 1.28.2 y
+`pymupdf4llm` se descartó por coste/SLO en TASK-25); toggle
+`PDFEXTRACTOR_WARMUP` (default true); `orjson` en default response class +
+handlers + `/ready`. Flujo TDD estricto (rojo → verde) + pausa obligatoria tras
+cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
 
 - [x] **TASK-27: Serialización con `orjson`**
       — La respuesta pesada de `/api/v1/extractions` (`extract.py:84`,
@@ -418,24 +420,37 @@ pausa obligatoria tras cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP
     Verificación: **148 passed / 2 skipped**, ruff check + ruff format (src tests)
     + mypy strict verdes.
 
-- [ ] **TASK-25: Markdown nativo con `pymupdf4llm`**
-      — `pymupdf_extractor.py:42-45` usa `page.get_text()` (texto plano). Se
-      sustituye por `pymupdf4llm.to_markdown(document, use_ocr=False)` (modo
-      legacy, sin OCR ni layout extras) manteniendo zero-disk, cierre del
-      `Document` en todos los caminos y el mapeo de errores de dominio.
-      `extraction_method` sigue `"pymupdf"` (contrato intacto con el orquestador).
+- [x] **TASK-25: Markdown nativo (renderer propio, sin `pymupdf4llm`)**
+      — `pymupdf_extractor.py:42-45` usaba `page.get_text()` (texto plano). Se
+      sustituye por un renderer Markdown propio alimentado por
+      `page.get_text("dict")`, manteniendo zero-disk, cierre del `Document` en
+      todos los caminos y el mapeo de errores de dominio. `extraction_method`
+      sigue `"pymupdf"` (contrato intacto con el orquestador).
   - **AC-25.1:** un PDF estructurado produce Markdown con marcadores (`#`, `-`,
-        `**`); `page_count` intacto.
+        `**`); `page_count` intacto. ✓
   - **AC-25.2:** cifrado/corrupto/sin-páginas siguen mapeando a 422; sin
-        `ResourceWarning` (documentos siempre cerrados).
+        `ResourceWarning` (documentos siempre cerrados). ✓
   - **AC-25.3:** `docs/api-contract.md` describe `extracted_text` como Markdown
-        (≥ `MIN_TEXT_LENGTH`, ≤ `MAX_EXTRACTED_CHARS`).
-  - **AC-25.4:** script de micro-benchmark (fuera de CI) reporta el ratio
-        texto vs. markdown; la aceptación de coste la ancla el SLO de carga
-        (`docs/report.md`, p95 < 500 ms), no un umbral rígido en CI.
-  - **Nota:** actualizar el assert de texto exacto en
-        `test_pymupdf_extractor.py::test_valid_pdf_returns_exact_text_and_page_count`;
-        revisar si `_normalize` (`\n{3,}` → `\n\n`) altera bloques de código/tabla.
+        (≥ `MIN_TEXT_LENGTH`, ≤ `MAX_EXTRACTED_CHARS`). ✓
+  - **AC-25.4:** script de micro-benchmark (`tests/extractor/load/bench_markdown.py`,
+        fuera de CI) reporta el ratio texto vs. markdown. ✓
+  - **Completado:** **Desvío** respecto a la decisión inicial (`pymupdf4llm`)
+    por rendimiento/SLO. Benchmark: `pymupdf4llm` 1.9-18 s/20p (40-180x
+    `get_text`) y trae `onnxruntime`+modelo GNN de layout; incompatible con
+    p95 < 500 ms. Se implementó `infrastructure/extraction/markdown.py`
+    (`document_to_markdown`) desde `get_text("dict")`: encabezados `#`..`###`
+    por tamaño de fuente relativo al cuerpo (peso por longitud de texto; bandas
+    ≥1.8/≥1.5/≥1.25), énfasis por flags de span (`bold=flags&16`,
+    `italic=flags&2`), listas (`-`/`1.`), párrafos/páginas separados por línea en
+    blanco. Micro-benchmark: **~1.0x** el coste de `get_text` (valid_20p.pdf:
+    1278 ms md vs. 1224 ms texto, ratio 1.04). Nuevo
+    `tests/extractor/test_markdown_renderer.py` (11 tests) + assert de exact-text
+    renombrado a `test_valid_pdf_returns_exact_markdown_and_page_count`.
+    `_normalize` (`\n{3,}`→`\n\n`) revisado: el renderer nunca emite >2 saltos
+    (no produce tablas ni fences), sin impacto. Verificación: **159 passed / 2
+    skipped**, `-m memory` (2 passed), ruff check + ruff format (src tests) +
+    mypy strict verdes. Se revirtieron `pymupdf4llm` y sus deps pesadas
+    (`uv sync` desinstaló onnxruntime/numpy/pymupdf_layout/tabulate/psutil/…).
 
 - [ ] **TASK-26: Warm-up preventivo de workers**
       — El primer trabajo paga el arranque en frío de `forkserver` (~3.4 s,
