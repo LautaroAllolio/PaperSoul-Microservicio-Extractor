@@ -379,3 +379,66 @@ Artefactos de referencia: `docs/report.md` (cifras 2026-10-09 sobre `:9000`),
         `load-tests/run-9000/` (`k6-output.txt`, `server.log`, `server-b.log`,
         `results-mixed.*`, `results-20p.*`).
 - [ ] Revisión con humano (TASK-12..24 aprobadas una a una)
+
+## Paso 6: Velocidad pura y Markdown nativo
+
+Decisiones acordadas con el humano: Markdown vía `pymupdf4llm` (get_text("markdown")
+no existe en PyMuPDF 1.28.2); toggle `PDFEXTRACTOR_WARMUP` (default true); `orjson`
+en default response class + handlers + `/ready`. Flujo TDD estricto (rojo → verde) +
+pausa obligatoria tras cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
+
+- [ ] **TASK-27: Serialización con `orjson`**
+      — La respuesta pesada de `/api/v1/extractions` (`extract.py:84`,
+      `response_model=ExtractResponse`) se serializa con el JSON estándar de
+      Python, cuello de botella del hilo principal bajo concurrencia.
+  - **AC-27.1:** `orjson` es dependencia runtime (`pyproject.toml`).
+  - **AC-27.2:** `create_app(...)` usa `default_response_class=ORJSONResponse`;
+        los 4 handlers de `handlers.py` y `/ready` en `health.py` devuelven
+        `ORJSONResponse`.
+  - **AC-27.3:** `Content-Type` sigue `application/json`; contrato `200`
+        (3 claves) y `{"error"}` sin cambios; tests de dialecto verdes.
+  - **AC-27.4:** test de round-trip de payload grande y assert del response
+        class por defecto.
+
+- [ ] **TASK-25: Markdown nativo con `pymupdf4llm`**
+      — `pymupdf_extractor.py:42-45` usa `page.get_text()` (texto plano). Se
+      sustituye por `pymupdf4llm.to_markdown(document, use_ocr=False)` (modo
+      legacy, sin OCR ni layout extras) manteniendo zero-disk, cierre del
+      `Document` en todos los caminos y el mapeo de errores de dominio.
+      `extraction_method` sigue `"pymupdf"` (contrato intacto con el orquestador).
+  - **AC-25.1:** un PDF estructurado produce Markdown con marcadores (`#`, `-`,
+        `**`); `page_count` intacto.
+  - **AC-25.2:** cifrado/corrupto/sin-páginas siguen mapeando a 422; sin
+        `ResourceWarning` (documentos siempre cerrados).
+  - **AC-25.3:** `docs/api-contract.md` describe `extracted_text` como Markdown
+        (≥ `MIN_TEXT_LENGTH`, ≤ `MAX_EXTRACTED_CHARS`).
+  - **AC-25.4:** script de micro-benchmark (fuera de CI) reporta el ratio
+        texto vs. markdown; la aceptación de coste la ancla el SLO de carga
+        (`docs/report.md`, p95 < 500 ms), no un umbral rígido en CI.
+  - **Nota:** actualizar el assert de texto exacto en
+        `test_pymupdf_extractor.py::test_valid_pdf_returns_exact_text_and_page_count`;
+        revisar si `_normalize` (`\n{3,}` → `\n\n`) altera bloques de código/tabla.
+
+- [ ] **TASK-26: Warm-up preventivo de workers**
+      — El primer trabajo paga el arranque en frío de `forkserver` (~3.4 s,
+        `docs/report.md`). El `lifespan` (`main.py:47-75`) debe precalentar el
+        `ProcessPoolExecutor` lanzando extracciones dummy para despertar los
+        workers antes de servir.
+  - **AC-26.1:** al arrancar quedan tibios `min(workers, max_concurrent)`
+        procesos (spy/contador de procesos iniciados).
+  - **AC-26.2:** el primer request real ya no paga los ~3.4 s de cold-start
+        (evidencia en test/log).
+  - **AC-26.3:** un fallo de warm-up se registra como warning estructurado y
+        **no** aborta el lifespan; `close()` sigue idempotente.
+  - **AC-26.4:** `PDFEXTRACTOR_WARMUP` (bool, default true) gobierna el
+        precalentamiento; documentado en `.env.example`/README;
+        `app.state.warmup = {"warmed", "duration_seconds"}` observable.
+  - **Nota:** `WARMUP_PDF` (1 página, generada en memoria y cacheada) en
+        `pymupdf_extractor.py`; `ProcessPoolTextExtractor.warmup()` envía los
+        jobs directos al executor (arranque, sin tráfico; no toca el gate);
+        `main.py` lo invoca vía `asyncio.to_thread` solo si `settings.warmup`.
+
+### Checkpoint CP-6: Velocidad y formato
+- [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-25..27
+- [ ] Re-corrida de carga en `:9000`; cold-start y p95 antes/después en `docs/report.md`
+- [ ] Revisión con humano (TASK-25..27 aprobadas una a una)
