@@ -6,6 +6,9 @@ application service behind the ``TextExtractor`` port, and the readiness flag
 that ``/ready`` reports and later tasks degrade under overload.
 """
 
+import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -32,6 +35,25 @@ from pdfextractor.presentation.api.v1 import extract as extract_api
 from pdfextractor.presentation.api.v1 import health as health_api
 from pdfextractor.presentation.api.v1 import metrics as metrics_api
 from pdfextractor.presentation.errors.handlers import register_exception_handlers
+
+_LOGGER = logging.getLogger("pdfextractor.pool")
+
+
+async def _warmup(extractor: ProcessPoolTextExtractor, *, enabled: bool) -> dict[str, object]:
+    """Pre-spawn the pool off the event loop and report the outcome (TASK-26).
+
+    A failure is logged and swallowed so a broken warm-up never stops the app
+    from coming up; ``close()`` remains the lifespan's only teardown.
+    """
+    if not enabled:
+        return {"warmed": False, "duration_seconds": 0.0}
+    started_at = time.monotonic()
+    try:
+        warmed = await asyncio.to_thread(extractor.warmup)
+    except Exception:
+        _LOGGER.warning("worker warm-up raised", extra={"error_type": "WarmupError"}, exc_info=True)
+        warmed = False
+    return {"warmed": warmed, "duration_seconds": time.monotonic() - started_at}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -70,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
         app.state.ready = True
+        app.state.warmup = await _warmup(extractor, enabled=resolved.warmup)
         try:
             yield
         finally:

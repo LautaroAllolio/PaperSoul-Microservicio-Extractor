@@ -3,9 +3,10 @@
 The ``pdfextractor.http`` logger records every request with the contract fields
 (``request_id``, ``duration_ms``, ``bytes``, ``pages``, ``method``, ``outcome``,
 ``error_type``) as ``extra``; the formatter renders them into one JSON line.
-Document content can never reach a record: the middleware only forwards fields
-parked on the request scope, and nothing downstream ever puts bytes or
-filenames into ``extra``.
+The ``pdfextractor.pool`` logger shares the same JSON stream for lifecycle
+events (e.g. the start-up warm-up). Document content can never reach a record:
+the middleware only forwards fields parked on the request scope, and nothing
+downstream ever puts bytes or filenames into ``extra``.
 """
 
 import json
@@ -14,6 +15,8 @@ import sys
 from typing import Any
 
 __all__ = ["JsonFormatter", "configure_logging"]
+
+_LOGGERS = ("pdfextractor.http", "pdfextractor.pool")
 
 _FIELDS = (
     "request_id",
@@ -48,20 +51,21 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: str, stream: Any | None = None) -> logging.Logger:
-    """Attach a JSON ``StreamHandler`` to the HTTP logger, once per process.
+    """Attach a JSON ``StreamHandler`` to each app logger, once per process.
 
     ``stream`` lets a test capture lines into a buffer; production uses stdout so
     the container runtime collects the stream without an extra hop.
     """
-    target = logging.getLogger("pdfextractor.http")
-    target.setLevel(_resolve(level))
-    if target.handlers:
-        return target
-    handler = logging.StreamHandler(stream=sys.stdout if stream is None else stream)
-    handler.setFormatter(JsonFormatter())
-    target.addHandler(handler)
-    target.propagate = False
-    return target
+    resolved = _resolve(level)
+    for name in _LOGGERS:
+        target = logging.getLogger(name)
+        target.setLevel(resolved)
+        if not target.handlers:
+            handler = logging.StreamHandler(stream=sys.stdout if stream is None else stream)
+            handler.setFormatter(JsonFormatter())
+            target.addHandler(handler)
+        target.propagate = False
+    return logging.getLogger("pdfextractor.http")
 
 
 def _resolve(level: str) -> int:

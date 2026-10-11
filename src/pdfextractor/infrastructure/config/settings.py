@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     extraction_timeout_seconds: float = 30.0
     max_pages: int = 1000
     max_extracted_chars: int = 5_000_000
+    warmup: bool = True
     metrics_enabled: bool = True
     log_level: str = "INFO"
 

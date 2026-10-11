@@ -45,6 +45,7 @@ Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 | `PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS` | `30.0` | Tope por extracción antes de `504` |
 | `PDFEXTRACTOR_MAX_PAGES` | `1000` | Tope de páginas (anti decompression-bomb) → `422` |
 | `PDFEXTRACTOR_MAX_EXTRACTED_CHARS` | `5000000` | Tope del texto extraído (anti decompression-bomb) → `422` |
+| `PDFEXTRACTOR_WARMUP` | `true` | Precalienta `min(workers, max_concurrent)` workers al arrancar (evita el cold-start de `forkserver`) |
 | `PDFEXTRACTOR_METRICS_ENABLED` | `true` | Monta `GET /metrics` |
 | `PDFEXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
 

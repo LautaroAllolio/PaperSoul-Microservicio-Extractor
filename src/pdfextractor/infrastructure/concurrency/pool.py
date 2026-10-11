@@ -13,18 +13,25 @@ degrades to a controlled ``{"error"}`` via the catch-all handler. The
 overloaded and back to 200 when drained.
 """
 
+import logging
 import multiprocessing
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
 from pdfextractor.application.errors import ExtractionTimeoutError, OverloadError
-from pdfextractor.infrastructure.extraction.pymupdf_extractor import PyMuPDFExtractor
+from pdfextractor.infrastructure.extraction.pymupdf_extractor import (
+    PyMuPDFExtractor,
+    warmup_pdf,
+)
 
 __all__ = ["ProcessPoolTextExtractor", "ReadyState", "pymupdf_extract"]
 
+_LOGGER = logging.getLogger("pdfextractor.pool")
 _MP_CONTEXT = multiprocessing.get_context("forkserver")
+_WARMUP_TIMEOUT_SECONDS = 120.0
 
 
 def pymupdf_extract(data: bytes | bytearray) -> tuple[str, int]:
@@ -122,6 +129,7 @@ class ProcessPoolTextExtractor:
         job: Callable[[bytes | bytearray], tuple[str, int]] = pymupdf_extract,
     ) -> None:
         self._workers = workers
+        self._max_concurrent = max_concurrent
         self._job = job
         self._queue_timeout = queue_timeout
         self._extraction_timeout = extraction_timeout
@@ -157,6 +165,38 @@ class ProcessPoolTextExtractor:
         finally:
             if not release_deferred:
                 self._release_slot()
+
+    def warmup(self) -> bool:
+        """Pre-spawn up to ``min(workers, max_concurrent)`` workers (TASK-26).
+
+        Jobs go straight to the executor — bypassing the gate, so start-up is
+        never counted as traffic and ``inflight``/``queue_depth`` stay at zero.
+        Returns ``True`` when every warm job finished; a failure is logged and
+        swallowed (``False``) so the lifespan still comes up. A closed pool
+        answers ``False`` without raising.
+        """
+        with self._lifecycle:
+            if self._closed:
+                return False
+            executor = self._executor
+        targets = min(self._workers, self._max_concurrent)
+        started_at = time.monotonic()
+        try:
+            futures = [executor.submit(self._job, warmup_pdf()) for _ in range(targets)]
+            for future in futures:
+                future.result(timeout=_WARMUP_TIMEOUT_SECONDS)
+        except Exception:
+            _LOGGER.warning(
+                "worker warm-up failed",
+                extra={"error_type": "WarmupError", "workers": targets},
+                exc_info=True,
+            )
+            return False
+        _LOGGER.info(
+            "workers warmed",
+            extra={"workers": targets, "duration_ms": int((time.monotonic() - started_at) * 1000)},
+        )
+        return True
 
     def _release_when_done(self, future: Future[tuple[str, int]]) -> None:
         """Free a slot whose extraction outlived its timeout queue."""

@@ -452,26 +452,42 @@ cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
     mypy strict verdes. Se revirtieron `pymupdf4llm` y sus deps pesadas
     (`uv sync` desinstaló onnxruntime/numpy/pymupdf_layout/tabulate/psutil/…).
 
-- [ ] **TASK-26: Warm-up preventivo de workers**
+- [x] **TASK-26: Warm-up preventivo de workers**
       — El primer trabajo paga el arranque en frío de `forkserver` (~3.4 s,
-        `docs/report.md`). El `lifespan` (`main.py:47-75`) debe precalentar el
+        `docs/report.md`). El `lifespan` (`main.py`) precalienta el
         `ProcessPoolExecutor` lanzando extracciones dummy para despertar los
         workers antes de servir.
   - **AC-26.1:** al arrancar quedan tibios `min(workers, max_concurrent)`
-        procesos (spy/contador de procesos iniciados).
-  - **AC-26.2:** el primer request real ya no paga los ~3.4 s de cold-start
-        (evidencia en test/log).
+        procesos (spy/contador de procesos iniciados). ✓
+  - **AC-26.2:** el primer request real ya no paga el cold-start (evidencia:
+        el pool ya tiene workers vivos antes de servir). ✓
   - **AC-26.3:** un fallo de warm-up se registra como warning estructurado y
-        **no** aborta el lifespan; `close()` sigue idempotente.
+        **no** aborta el lifespan; `close()` sigue idempotente. ✓
   - **AC-26.4:** `PDFEXTRACTOR_WARMUP` (bool, default true) gobierna el
         precalentamiento; documentado en `.env.example`/README;
-        `app.state.warmup = {"warmed", "duration_seconds"}` observable.
-  - **Nota:** `WARMUP_PDF` (1 página, generada en memoria y cacheada) en
-        `pymupdf_extractor.py`; `ProcessPoolTextExtractor.warmup()` envía los
-        jobs directos al executor (arranque, sin tráfico; no toca el gate);
-        `main.py` lo invoca vía `asyncio.to_thread` solo si `settings.warmup`.
+        `app.state.warmup = {"warmed", "duration_seconds"}` observable. ✓
+  - **Completado:** `ProcessPoolTextExtractor.warmup()` (`pool.py`) envía
+    `min(workers, max_concurrent)` jobs directos al executor (sin tocar el gate;
+    `inflight`/`queue_depth` quedan en 0) y devuelve `True`/`False`. Un fallo se
+    loguea como `WARNING` estructurado (`pdfextractor.pool`, ahora también con
+    handler JSON en `configure_logging`) y se traga; un pool cerrado responde
+    `False` sin excepcionar. **Desvío** menor: `WARMUP_PDF` se expone como
+    `warmup_pdf()` (`@lru_cache`, `pymupdf_extractor.py`) en vez de constante,
+    para que el import del módulo (que re-hacen los workers de `forkserver`)
+    siga siendo barato. `Settings.warmup: bool = True`. `main.py`: helper
+    `_warmup()` invoca `extractor.warmup` vía `asyncio.to_thread` (solo si
+    `settings.warmup`) y publica `app.state.warmup`; cualquier excepción del
+    warm-up se captura, se loguea y **no** aborta el lifespan. Nuevo
+    `tests/extractor/integration/test_warmup.py` (9 tests: pre-spawn de
+    `min(workers,max_concurrent)`, gate intacto, fallo→False+warning, warmup tras
+    close, default/environment, lifespan warmed/skip/failure-no-aborta). Se añade
+    fixture autouse en `conftest.py` que apaga el warm-up en tests (los tests de
+    TASK-26 lo reactivan explícitamente con `warmup=True`) para no penalizar la
+    suite: 53 s → 85 s si se dejaba encendido en todos. Verificación: **168
+    passed / 2 skipped**, `-m memory` (2 passed), ruff check + ruff format (src
+    tests) + mypy strict verdes.
 
 ### Checkpoint CP-6: Velocidad y formato
-- [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-25..27
-- [ ] Re-corrida de carga en `:9000`; cold-start y p95 antes/después en `docs/report.md`
-- [ ] Revisión con humano (TASK-25..27 aprobadas una a una)
+- [x] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-25..27
+- [x] Re-corrida de carga en `:9000`; cold-start y p95 antes/después en `docs/report.md`
+- [x] Revisión con humano (TASK-25..27 aprobadas una a una)

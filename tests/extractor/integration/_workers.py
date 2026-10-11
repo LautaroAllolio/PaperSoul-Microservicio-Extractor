@@ -28,3 +28,13 @@ def stalled_job(data: bytes | bytearray) -> tuple[str, int]:
     """Overrun a short pool timeout by a wide margin (for the 504 backstop)."""
     time.sleep(0.6)
     return "too late", 1
+
+
+def noop_job(data: bytes | bytearray) -> tuple[str, int]:
+    """Return instantly, so a pool spins its workers up and nothing else."""
+    return "", 0
+
+
+def boom_job(data: bytes | bytearray) -> tuple[str, int]:
+    """Fail inside the worker, so ``warmup`` sees a rejected future."""
+    raise RuntimeError("warm-up boom")
