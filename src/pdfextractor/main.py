@@ -19,6 +19,7 @@ from pdfextractor.infrastructure.concurrency.pool import (
     ReadyState,
 )
 from pdfextractor.infrastructure.config.settings import Settings, get_settings
+from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 from pdfextractor.infrastructure.memory.pool import BufferPool
 from pdfextractor.infrastructure.middleware.middlewares import (
     RequestIdMiddleware,
@@ -74,7 +75,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             extractor.close()
 
-    app = FastAPI(title="pdfextractor", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="pdfextractor",
+        version=__version__,
+        lifespan=lifespan,
+        default_response_class=OrjsonResponse,
+    )
     app.add_middleware(SizeBackstopMiddleware, max_upload_bytes=resolved.max_upload_bytes)
     app.add_middleware(RequestIdMiddleware, metrics=bundle)
     register_exception_handlers(app)

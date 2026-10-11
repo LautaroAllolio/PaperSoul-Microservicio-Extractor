@@ -11,10 +11,10 @@ import logging
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pdfextractor.application.errors import PdfExtractorError
+from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 
 __all__ = ["register_exception_handlers"]
 
@@ -31,31 +31,31 @@ def register_exception_handlers(app: FastAPI) -> None:
     """Attach the domain and catch-all handlers to ``app``."""
 
     @app.exception_handler(PdfExtractorError)
-    async def domain_error(request: Request, exc: PdfExtractorError) -> JSONResponse:
+    async def domain_error(request: Request, exc: PdfExtractorError) -> OrjsonResponse:
         _mark_failure(request, exc)
-        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+        return OrjsonResponse(status_code=exc.status, content={"error": str(exc)})
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def validation_error(request: Request, exc: RequestValidationError) -> OrjsonResponse:
         _mark_failure(request, exc)
-        return JSONResponse(status_code=422, content={"error": "solicitud inválida"})
+        return OrjsonResponse(status_code=422, content={"error": "solicitud inválida"})
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def http_error(request: Request, exc: StarletteHTTPException) -> OrjsonResponse:
         _mark_failure(request, exc)
         detail = exc.detail if isinstance(exc.detail, str) and exc.detail else "error"
         message = _HTTP_ERROR_MESSAGES.get(exc.status_code, detail)
-        return JSONResponse(status_code=exc.status_code, content={"error": message})
+        return OrjsonResponse(status_code=exc.status_code, content={"error": message})
 
     @app.exception_handler(Exception)
-    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+    async def unhandled_error(request: Request, exc: Exception) -> OrjsonResponse:
         _mark_failure(request, exc)
         _LOGGER.error(
             "unhandled_exception",
             exc_info=(type(exc), exc, exc.__traceback__),
             extra=_error_extra(request, exc),
         )
-        return JSONResponse(status_code=500, content={"error": "internal"})
+        return OrjsonResponse(status_code=500, content={"error": "internal"})
 
 
 def _mark_failure(request: Request, exc: BaseException) -> None:

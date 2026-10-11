@@ -6,9 +6,9 @@ reflects the readiness flag the lifespan owns; Task 9 flips it under overload.
 """
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 
 from pdfextractor import __version__
+from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 
 __all__ = ["router"]
 
@@ -21,7 +21,7 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def ready(request: Request) -> JSONResponse:
+async def ready(request: Request) -> OrjsonResponse:
     ready_state = getattr(request.app.state, "ready_state", None)
     is_ready = (
         ready_state.ready
@@ -29,5 +29,5 @@ async def ready(request: Request) -> JSONResponse:
         else bool(getattr(request.app.state, "ready", True))
     )
     if is_ready:
-        return JSONResponse(status_code=200, content={"status": "ready"})
-    return JSONResponse(status_code=503, content={"status": "not ready"})
+        return OrjsonResponse(status_code=200, content={"status": "ready"})
+    return OrjsonResponse(status_code=503, content={"status": "not ready"})

@@ -387,7 +387,7 @@ no existe en PyMuPDF 1.28.2); toggle `PDFEXTRACTOR_WARMUP` (default true); `orjs
 en default response class + handlers + `/ready`. Flujo TDD estricto (rojo → verde) +
 pausa obligatoria tras cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
 
-- [ ] **TASK-27: Serialización con `orjson`**
+- [x] **TASK-27: Serialización con `orjson`**
       — La respuesta pesada de `/api/v1/extractions` (`extract.py:84`,
       `response_model=ExtractResponse`) se serializa con el JSON estándar de
       Python, cuello de botella del hilo principal bajo concurrencia.
@@ -399,6 +399,24 @@ pausa obligatoria tras cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP
         (3 claves) y `{"error"}` sin cambios; tests de dialecto verdes.
   - **AC-27.4:** test de round-trip de payload grande y assert del response
         class por defecto.
+  - **Completado:** `orjson>=3.10` como dependencia runtime. **Desvío** de AC-27.2
+    por CleanCode/rendimiento: `fastapi.responses.ORJSONResponse` está
+    **deprecado** en FastAPI 0.141 y emite `FastAPIDeprecationWarning` en **cada**
+    respuesta; además, fijar un `response_class` desactiva el fast-path
+    `dump_json` de Pydantic. Benchmark (1 MB de `extracted_text`):
+    `jsonable_encoder`+`orjson.dumps` = 0.050 ms vs. `model_dump_json` de Pydantic
+    = 0.884 ms (**17.8x** más rápido orjson). Se creó una clase propia
+    `infrastructure/http/orjson_response.py::OrjsonResponse` (subclase de
+    `Response`, `media_type="application/json"`, `orjson.dumps(..., OPT_NON_STR_KEYS)`),
+    libre del símbolo deprecado y sin warnings. `main.py` la usa como
+    `default_response_class`; los 4 handlers de `handlers.py` y `/ready` en
+    `health.py` devuelven `OrjsonResponse`. Nuevo
+    `tests/extractor/integration/test_orjson_serialization.py` (5 tests:
+    response class por defecto es `OrjsonResponse`, handler 404 devuelve
+    `OrjsonResponse`, round-trip de payload grande ~"ñandú"×100k, `/ready` JSON,
+    y ausencia total de `FastAPIDeprecationWarning` en `/health`+`/ready`+404).
+    Verificación: **148 passed / 2 skipped**, ruff check + ruff format (src tests)
+    + mypy strict verdes.
 
 - [ ] **TASK-25: Markdown nativo con `pymupdf4llm`**
       — `pymupdf_extractor.py:42-45` usa `page.get_text()` (texto plano). Se
