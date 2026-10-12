@@ -500,3 +500,198 @@ cada tarea. Orden: TASK-27 → TASK-25 → TASK-26 → CP-6.
         `504` ni cold-start (`workers warmed` ~1.2 s); RSS ~486 MiB. T16 (soak)
         sigue pendiente; recomendación de re-medir B en host silencioso (§ 6).
 - [x] Revisión con humano (TASK-25..27 aprobadas una a una)
+
+## Paso 7: Estabilización de rendimiento post-auditoría (DECLARADO — pendiente de OK)
+
+> **Estado: NO iniciado.** Este paso queda *declarado* para revisión del humano.
+> Ninguna tarea `[ ]` se implementa hasta recibir el **OK explícito**; el código
+> de `src/` no se toca hasta entonces. Flujo previsto: TDD estricto (rojo → verde)
+> + pausa obligatoria tras cada tarea, con gates (`pytest`, `-m memory`, ruff
+> check/format, mypy) verdes y actualización de `docs/report.md` en cada cierre.
+
+Motiva este paso la corrida 2026-10-11 (CP-6), que dejó **cuatro puntos débiles**
+abiertos. El diagnóstico siguiente es de solo lectura (código + artefactos de
+`load-tests/run-9000/` y del backup `/tmp/opencode/run-9000-baseline-20261009/`);
+la propuesta no se ha aplicado.
+
+### Diagnóstico (causa raíz por punto)
+
+**P1 — p95 de línea base (289 → 437 ms).**
+- Ambas corridas usan el **mismo** lanzador (`/tmp/opencode/run_server.sh`, sin
+  `--no-access-log`) y **ambas** registran doble log (uvicorn access + JSON
+  `pdfextractor.http`): el backup previo tiene 4521 + 4521 líneas en
+  `server-b.log`, la corrida actual 4519 + 4519. **No** hubo cambio de config de
+  logging entre corridas.
+- Por tanto la subida **no** es atribuible a un cambio de código/config → domina
+  la **varianza del host WSL2** (el p95 ya osciló 65 → 289 → 437).
+- Coste controlable: `main.py:66` activa logging a INFO, y uvicorn corre con su
+  **access log** por defecto (`access_log` no se desactiva en
+  `__main__.py:17` ni en el lanzador). Cada request escribe **dos** veces de
+  forma **síncrona** en el event loop (`middlewares.py:59-85`, log en `:77`
+  **antes** del `await send` en `:85`) contra un archivo en **drvfs**
+  (`/mnt/c/...`), lento en WSL2.
+- Con los aislados nuevos (mezcla ~47 ms) la capacidad es ~85 rps; la base a
+  40 rps queda a ~47 % de utilización → la cola p95 es **jitter**, no saturación.
+  El margen está en **sacar trabajo síncrono del loop**.
+
+**P2 — throughput en carga pesada B (28.78 → 20.24 rps).**
+- Config usada: `MAX_CONCURRENT_EXTRACTIONS=4` con **8 núcleos**
+  (`settings.py:98-100`, `effective_workers` en `:93-95`) → **4 cores ociosos**
+  bajo carga homogénea CPU-bound.
+- Ocupación medida ~184 ms/slot bajo carga vs ~100 ms aislado (contención);
+  encaja con `4 / 0.184 ≈ 21.7 rps`.
+- El aislado del `20p` **mejoró** (124 → ~100 ms) pese a que B cayó ⇒ no es el
+  camino de código; es contención + infrautilización de cores. Hipótesis: subir
+  `max_concurrent` a 6–8 eleva el throughput agregado hasta el límite de
+  CPU/memoria. **Requiere barrido medido**, no suposición.
+
+**P3 — cuello residual del event loop (sondas en colapso A).**
+- `/health` y `/ready` comparten el mismo loop (`main.py:73-82`, `health.py`) y
+  pasan por `RequestIdMiddleware`; a 400 rps eso son ~400 escrituras
+  **bloqueantes**/s al log (x2 por el access log de uvicorn) → ahoga también a
+  las sondas.
+- Un semáforo dedicado para `asyncio.to_thread` (`extract.py:69`) apenas cambia
+  nada hoy: la puerta ya acota a 4 (`pool.py:138`) y el executor por defecto es
+  12 hilos. Es higiene/futuro, no la palanca principal.
+- Palanca principal: **logging no bloqueante** + **quitar access log duplicado**
+  + **fast-path de sondas** (sin métrica/log JSON en `/health` y `/ready`).
+
+**P4 — soak T16.**
+- El arnés **ya** soporta soak: `run.sh --profile soak` usa la escena
+  `constant-arrival-rate` de `loadgen.js:142-160` (`LOAD_HAPPY_RPS` por defecto
+  20, `LOAD_SOAK_DURATION` por defecto 10m) y muestrea RSS a CSV
+  (`run.sh:111-122`).
+- Pero `server_rss_kb()` (`run.sh:91-97`) solo captura el proceso
+  **`uvicorn.*pdfextractor.main`**: **no** suma `forkserver`,
+  `resource_tracker` ni los **workers** (cuyo cmdline es
+  `-c from multiprocessing.forkserver import main`). El RSS de los workers
+  (~250 MiB del total de ~486 MiB) queda fuera del soak.
+- No existe ningún artefacto formal de soak; T16 sigue abierto.
+
+### Task List (declarada)
+
+- [x] **TASK-28: Logging no bloqueante, sin access log duplicado y fast-path de sondas (P1 + P3)**
+      — La ruta caliente escribe el log JSON de forma síncrona en el event loop
+      (`middlewares.py:77`) y uvicorn añade su propio access log (`__main__.py:17`),
+      ambos a drvfs. Se saca la escritura del loop y se elimina la duplicación.
+  - **Alcance:** (A1) `uvicorn.run(..., access_log=False)` en `__main__.py` y
+        `--no-access-log` en scripts/documentación; (A2) handler no bloqueante en
+        `logging_.py` (`QueueHandler` + `QueueListener` en hilo de fondo) +
+        `shutdown_logging()`/flush en el teardown del `lifespan` (`main.py`),
+        preservando la API `configure_logging(level, stream=...)` de los tests;
+        (A3) fast-path de sondas en `RequestIdMiddleware` (`/health`, `/ready`)
+        que omite log JSON y métrica pero **sigue ecoando** el id.
+  - **AC-28.1:** los logs de uvicorn no contienen líneas de access log; el log
+        JSON estructurado permanece y el formato es idéntico al actual. ✓
+  - **AC-28.2:** `configure_logging` no escribe en el hilo del event loop
+        (mensajes entregados por el dispatcher; `flush` en el teardown asegura
+        entrega en los tests). ✓
+  - **AC-28.3:** `/health` y `/ready` siguen devolviendo 200 con
+        `x-request-id`/`x-correlation-id` ecoados; no emiten log JSON ni cuentan
+        en las métricas de extracción. ✓
+  - **AC-28.4:** test de `uvicorn.run` con `access_log=False` (monkeypatch, como
+        `test_extractor_settings.py`), test de captura de logs tras flush y test
+        de middleware para el fast-path. ✓
+  - **Completado:** `logging_.py` gana un dispatcher de un hilo daemon
+        (`_AsyncDispatcher` + `_DispatchHandler`): `emit` solo encola, el hilo de
+        fondo escribe al `StreamHandler`; `flush_logging()` drena la cola y
+        `shutdown_logging()` la volca y para el hilo (registrado en `atexit`). La
+        idempotencia de `configure_logging` ahora comprueba si ya hay un
+        `_DispatchHandler` (no si hay *cualquier* handler), porque `pytest`
+        adjunta sus propios handlers al logger de la app. `main.py` llama
+        `flush_logging()` en el `finally` del `lifespan`. `__main__.py` fija
+        `access_log=False`; `run.sh` y el README añaden `--no-access-log`.
+        `RequestIdMiddleware` salta log y métrica en `_PROBE_PATHS = {"/health",
+        "/ready"}` conservando el eco del id. **Verificación de medición**
+        (A/B pareado, `load-tests/load-test.js -e K6_SCENARIO=extract_baseline`,
+        mismo host): el log del servicio pasa de 2151 líneas (1071 access + 1071
+        JSON) a **1106 (0 access + 1097 JSON)**; p95 **1.64 s → 870 ms** (~−47 %),
+        p99 1.98 s → 1.01 s, avg 443.5 → 298.3 ms. La varianza del host WSL2
+        mantiene la línea base absoluta por encima de p95 < 300 ms en esta
+        ventana (documentado en `docs/report.md` § 3.6). Gates: **175 passed / 2
+        skipped**, `-m memory` (2 passed), ruff check/format + mypy strict
+        verdes.
+
+- [x] **TASK-29: Barrido y ajuste de concurrencia del pool (P2)**
+      — `MAX_CONCURRENT_EXTRACTIONS=4` infrautiliza núcleos y la cola es inestable en régimen de sobrecarga.
+  - **Alcance:** barrido `MAX_CONCURRENT_EXTRACTIONS ∈ {4, 6, 8}` sobre Vegeta B (150 rps, 20 páginas) + k6 stress (confirmación), mismo host y pool tibio; registrar throughput, p50/p99 y uso de CPU/RSS por proceso.
+  - **AC-29.1:** tabla de resultados del barrido (media de 2 repeticiones) con throughput y p99 por valor de concurrencia. ✓
+  - **AC-29.2:** decisión explícita: mantener el **default de código en 4** (conservador y coincide con corrida de referencia CP-6); documentar valor recomendado `6` para hosts con 8 vCPU (mejora throughput + estabiliza cola) y trade-off. ✓
+  - **AC-29.3:** no se cambió el default en código; se documenta en `.env.example`/`README.md` (recomendado 6). Respeta footgun TASK-24. ✓
+  - **Resultados (Vegeta B, 150 rps, 30s, medias de 2 rep.):**
+      | N | tp (rps) | éxito (%) | p50 (s) | p99 (s) | máx (s) | RSS pico (KB) | CPU pico (%) |
+      |---:|---:|---:|---:|---:|---:|---:|---:|
+      | 4 | 16.82 | 16.0 | 2.158 | **9.369** | 9.604 | 530086 | ~441% |
+      | 6 | **30.39** | 21.7 | 2.018 | **2.375** | 2.766 | 613120 | ~601% |
+      | 8 | **34.62** | 24.7 | 2.034 | **2.577** | 2.932 | 747386 | ~705% |
+  - **Verificación:** N=6 estabiliza drásticamente el tail (p99 2.34–2.41s) y duplica throughput vs N=4 (+80%), con retorno decreciente en N=8. Artefactos: `/tmp/opencode/sweep/b_{4,6,8}_r{1,2}/` (report.txt, cpu.csv, results.bin). CP-6 (N=4): tp ~20.24 rps, p50 2.025s (referencia) — varianza de host explica diferencia; con N=6 tp ~30.4 rps con cola estable. Decisión: **mantener default 4 en código; documentar recomendado 6**.
+
+
+
+- [ ] **TASK-30: Executor dedicado y acotado para `asyncio.to_thread` (P3 residual)**
+      — Hoy `asyncio.to_thread` (`extract.py:69`) usa el executor por defecto
+      (12 hilos) mientras la puerta acota a 4; un executor dedicado del tamaño de
+      la capacidad evita sobre-apilar jobs si la capacidad sube (TASK-29).
+  - **Alcance:** `concurrent.futures.ThreadPoolExecutor` dedicado (tamaño =
+        capacidad de admisión) vivo en el `lifespan`, usado por la ruta de
+        extracción; cola acotada a la capacidad.
+  - **AC-30.1:** el número de hilos activos nunca excede la capacidad de la
+        puerta; test de no-sobrepasar capacidad (estilo tests de concurrencia).
+  - **AC-30.2:** el executor se cierra en el teardown del `lifespan` sin fugas.
+  - **AC-30.3:** Vegeta A (que ya incluye `GET /health` y `GET /ready`) antes/
+        después; comparar latencia de sondas bajo colapso mixto a 400 rps.
+
+- [ ] **TASK-31: Soak T16 — sampler de árbol de procesos + corrida + documentación (P4)**
+      — El sampler actual solo mide el proceso principal; falta el RSS de los
+      workers de `forkserver`.
+  - **Alcance:** sampler que sume el RSS de **todo el árbol** (main + forkserver +
+        resource_tracker + workers) y escriba CSV por-proceso; `run.sh --profile
+        soak` lo usa; corrida determinista (~8 min @ 20 rps) sobre `:9000`
+        (`MAX_CONCURRENT_EXTRACTIONS=4`, `QUEUE_TIMEOUT_SECONDS=2`,
+        `MAX_UPLOAD_BYTES=1048576`, `METRICS_ENABLED=true`, `WARMUP=true`).
+  - **AC-31.1:** `load-tests/run-9000/soak-rss.csv` con RSS total y por-proceso
+        del árbol durante toda la corrida.
+  - **AC-31.2:** resumen de estabilidad (primero/último/mín/máx, pendiente
+        MB/min) y veredicto de meseta o deriva.
+  - **AC-31.3:** `docs/report.md` gana una § 3.6 (soak) con las cifras; T16 se
+        cierra o se re-declara con hallazgos.
+
+- [ ] **TASK-32: Cierre de reporte y verificación integral (Paso 7)**
+      — Consolidar artefactos y resultados de TASK-28..31 en `docs/report.md`
+      (§ 3.5/§ 3.6, § 5–§ 9 según corresponda) y re-verificar SLOs.
+  - **AC-32.1:** `docs/report.md` refleja el veredicto de los 4 puntos con
+        artefactos enlazados.
+  - **AC-32.2:** gates verdes: `pytest`, `-m memory`, ruff check/format, mypy.
+  - **AC-32.3:** sin commits automáticos; revisión humana por tarea.
+
+### Checkpoint CP-7: Estabilización (declarado, pendiente de OK)
+- [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-28..32
+- [ ] p95 de línea base recuperado (< 300 ms) o causa atribuida y documentada
+- [ ] Throughput de B re-medido con la concurrencia decidida (TASK-29)
+- [ ] Soak T16 ejecutado y documentado en `docs/report.md` § 3.6
+- [ ] Revisión con humano (TASK-28..32 aprobadas una a una)
+
+### Riesgos y mitigaciones (Paso 7)
+
+| Riesgo | Impacto | Mitigación |
+|---|---|---|
+| Varianza del host WSL2 enmascara mejoras | Alto | Barridos A/B en la misma sesión; 2–3 repeticiones; reportar mediana |
+| Subir `max_concurrent` degrada p99/memoria | Medio | Barrido con p99 y RSS como criterio de aceptación; revertir si rompe SLO |
+| Logging async altera el *timing* en tests | Medio | Listener con `flush()` en teardown; ruta síncrona cuando se inyecta `stream` |
+| Sobrescribir plan/ToDo incompleto (CP-5 tiene `[ ]`) | Medio | Anexar; no borrar items pendientes existentes |
+| Confundir varianza con regresión (P1/P2) | Medio | Medir antes/después con el mismo arnés y host silencioso |
+
+### Decisiones que requieren OK (antes de iniciar)
+
+1. **Logging (TASK-28):** ¿alcance completo A1+A2+A3 (async + sin access log +
+   fast-path sondas) o solo A1 (mínimo)? *Recomendado: A1+A2+A3.*
+2. **Concurrencia (TASK-29):** ¿aceptar cambio de **default** de
+   `MAX_CONCURRENT_EXTRACTIONS` si el barrido lo respalda, o limitarse a
+   **documentar** el tuning? *Recomendado: documentar primero; cambiar default
+   solo si el barrido lo justifica sin romper p99.*
+3. **Registro de tareas:** ¿IDs `TASK-28..32` como aquí declarados, anexados a
+   `docs/tasks/todo.md`? *Recomendado: sí.*
+4. **Soak (TASK-31):** ¿~8 min @ 20 rps sobre `:9000`? *Recomendado: sí.*
+5. **Ejecución de barridos:** ¿los ejecuta el agente (levantan servidor + carga)
+   o se preparan los comandos para que los corra el humano? *Recomendado: que
+   los ejecute el agente.*

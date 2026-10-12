@@ -14,15 +14,17 @@ v2.3.0 (snap), Vegeta v12.13.0 · **Entorno:** WSL2 (Ubuntu sobre Windows),
 (`--factory pdfextractor.main:create_app`) en `127.0.0.1:9000`, con warm-up de
 workers activo (`PDFEXTRACTOR_WARMUP=true`).
 
-> **Corrida actual vs. anterior:** este documento ha sido re-ejecutado contra el
-> binario **posterior a TASK-12…TASK-27** (robustez + las tres optimizaciones de
-> la fase de velocidad pura: serialización `orjson`/TASK-27, Markdown nativo
+> **Corrida actual vs. anterior:** las cifras de § 3 y § 5 provienen del binario
+> **posterior a TASK-12…TASK-27** (robustez + las tres optimizaciones de la fase
+> de velocidad pura: serialización `orjson`/TASK-27, Markdown nativo
 > in-house/TASK-25 y warm-up preventivo de workers/TASK-26). Por eso § 3 y § 5
 > **reemplazan** las cifras de la corrida de 2026-10-09: la comparativa
 > cuantitativa (antes/después, por régimen) está en la tabla de delta de § 3 y el
 > impacto atribuible a cada tarea en
-> [§ 9](#9-cambios-de-comportamiento-task-1227-que-explican-la-diferencia); el
-> anexo de pruebas de robustez sigue en `docs/optimization-report.md`.
+> [§ 9](#9-cambios-de-comportamiento-task-1228-que-explican-la-diferencia); el
+> anexo de pruebas de robustez sigue en `docs/optimization-report.md`. **TASK-28**
+> (logging no bloqueante, sin access log y fast-path de sondas) es posterior a esa
+> corrida: su efecto se mide aparte, en un A/B pareado, en § 3.6.
 
 ## 1. Alcance
 
@@ -293,6 +295,43 @@ conexiones que el cliente corta a los 35 s (los `0` de § 3.3) y algunas que no
 alcanzan a enmarcarse en el event loop saturado; aun así, **todo lo respondido
 cayó en `{200, 503}`**.
 
+### 3.6 Logging no bloqueante y sondas (TASK-28)
+
+La ruta caliente escribía el log JSON estructurado **de forma síncrona en el
+event loop** (`middlewares.py`), mientras uvicorn añadía su propio **access log**
+por defecto: dos escrituras por request, ambas contra un archivo en drvfs
+(`/mnt/c/…`, lento en WSL2). TASK-28 saca la escritura del loop (handler no
+bloqueante con `QueueHandler`/dispatcher en un hilo de fondo, volcado con
+`flush_logging()` en el teardown del `lifespan`), desactiva el access log
+duplicado (`access_log=False` en `python -m pdfextractor` y `--no-access-log`
+en scripts/README) y añade un **fast-path de sondas** (`/health`, `/ready`):
+siguen ecoando `X-Request-Id`/`X-Correlation-Id` pero no emiten log ni cuentan
+métrica.
+
+**Evidencia directa** del access log (misma sesión, `extract_baseline` k6):
+
+| Config | Líneas de log | Access log uvicorn | JSON estructurado |
+|---|---:|---:|---:|
+| Antes (access log + logging síncrono) | 2151 | 1071 | 1071 |
+| Después (sin access log + logging asíncrono) | 1106 | **0** | 1097 |
+
+La eliminación es exacta: el log del servicio se **reduce a la mitad**. En un A/B
+consecutivo en el mismo host (host ruidoso en este momento: la propia línea base
+absoluta queda muy por encima de § 3.1), la latencia baja de forma consistente en
+todos los percentiles:
+
+| Config | avg | med | p90 | p95 | p99 | máx |
+|---|---:|---:|---:|---:|---:|---:|
+| Antes | 443.5 ms | 245.7 ms | 1.36 s | **1.64 s** | 1.98 s | 2.51 s |
+| Después | **298.3 ms** | **221.6 ms** | **755 ms** | **870 ms** | **1.01 s** | **1.28 s** |
+
+La mejora es relativa, no absoluta: la varianza del host WSL2 mantiene la línea
+base por encima del objetivo puntual de p95 < 300 ms en esta ventana, pero el
+`p95` cae ~47 % (1.64 s → 870 ms) y `p99` a la mitad. La medición de esta
+subsección es un A/B pareado `load-tests/load-test.js -e K6_SCENARIO=extract_baseline`
+sobre el mismo host; la corrida de referencia de § 3.1 corresponde al binario
+previo a TASK-28.
+
 ## 4. Análisis
 
 ### 4.1 Capacidad y rodilla
@@ -410,7 +449,8 @@ en esta corrida el `503` acotado se cumple en **todos** los regímenes
 PDFEXTRACTOR_PORT=9000 PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=4 \
 PDFEXTRACTOR_MAX_UPLOAD_BYTES=1048576 PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS=2 \
 PDFEXTRACTOR_METRICS_ENABLED=true PDFEXTRACTOR_WARMUP=true \
-uv run uvicorn --factory pdfextractor.main:create_app --host 127.0.0.1 --port 9000
+uv run uvicorn --factory pdfextractor.main:create_app --host 127.0.0.1 --port 9000 \
+  --no-access-log
 
 # 2) k6 (línea base + rodilla + sonda) contra /api/v1/extractions
 k6 run --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" \
@@ -473,14 +513,16 @@ son sintéticos (páginas de texto aleatorio). k6 corrió como snap (sin permiso
 de escritura fuera del home, por lo que no se generó el `--summary-export`
 JSON; el reporte textual es equivalente).
 
-## 9. Cambios de comportamiento (TASK-12..27) que explican la diferencia
+## 9. Cambios de comportamiento (TASK-12..28) que explican la diferencia
 
 Las cifras de § 3 y el veredicto de § 5 corresponden al binario **posterior** a
 la suite de robustez (TASK-12…TASK-24) **y** a las tres optimizaciones de la fase
 de velocidad pura (TASK-25 Markdown nativo, TASK-26 warm-up de workers, TASK-27
 `orjson`). Esta sección resume **qué cambió** respecto de la corrida del
 2026-10-09 y por eso los números se movieron. El detalle de cada tarea (con sus
-tests) vive en `docs/tasks/todo.md` y `docs/optimization-report.md`.
+tests) vive en `docs/tasks/todo.md` y `docs/optimization-report.md`. **TASK-28**
+se incluye al final por completitud, pero es posterior a la corrida de § 3 y su
+efecto se mide en el A/B pareado de § 3.6 (no en las tablas de § 3).
 
 | Cambio | Dónde | Efecto observado en esta corrida |
 |---|---|---|
@@ -499,12 +541,14 @@ tests) vive en `docs/tasks/todo.md` y `docs/optimization-report.md`.
 | **Serialización con `orjson`** (default response class + handlers + `/ready`) | `orjson_response.py`, `main.py`, `handlers.py`, `health.py` (TASK-27) | Response path más barato; aislados de extracción **más rápidos** (§ 3.5) y mejor throughput en el régimen mixto A (58.27 → 72.48 rps) |
 | **Markdown nativo in-house** desde `get_text("dict")` (sin `pymupdf4llm`) | `markdown.py`, `pymupdf_extractor.py` (TASK-25) | Cuerpo `200` en Markdown con el **mismo tamaño** (~122 KB el `20p`); coste ~1.0x del texto plano, no penaliza el p95 (aislados a la baja) |
 | **Warm-up preventivo de workers** (`PDFEXTRACTOR_WARMUP`, default true) | `pool.py`, `main.py`, `settings.py`, `logging_.py` (TASK-26) | `workers warmed` en ~1.2 s al arrancar; el primer POST real baja a ~0.7 s y la rampa queda en 5–87 ms — desaparece el spike de `forkserver` (~3.4 s) de la corrida previa |
+| **Logging no bloqueante + sin access log + fast-path de sondas** | `logging_.py`, `main.py`, `middlewares.py`, `__main__.py` (TASK-28) | El log del servicio se reduce a la mitad (0 líneas de access log) y el p95 de la línea base cae ~47 % en un A/B pareado (§ 3.6) |
 
-**Estado de verificación:** suite **168 passed / 2 skipped** + `-m memory`
-**2 passed** (ruff/format/mypy verdes) y **corrida de carga sobre `:9000`
-re-ejecutada y capturada en `load-tests/run-9000/`** (esta misma sesión). El CP-5
-queda solo a la espera de la **revisión humana** de TASK-12..27; T16 (soak de
-RSS) permanece pendiente.
+**Estado de verificación:** suite **175 passed / 2 skipped** + `-m memory`
+**2 passed** (ruff/format/mypy verdes) y **A/B de línea base sobre `:9000`**
+(TASK-28, § 3.6); la corrida de referencia de § 3 sigue capturada en
+`load-tests/run-9000/`. El CP-5 queda a la espera de la **revisión humana** de
+TASK-12..27 (aprobar TASK-28 es parte del Paso 7, CP-7); T16 (soak de RSS)
+permanece pendiente.
 
 ## 8. Referencias
 
