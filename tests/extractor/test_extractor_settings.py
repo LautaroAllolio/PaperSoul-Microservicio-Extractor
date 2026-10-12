@@ -115,6 +115,7 @@ def test_the_entrypoint_binds_to_the_configured_host_and_port(monkeypatch) -> No
         calls["app"] = app
         calls["host"] = host
         calls["port"] = port
+        calls["access_log"] = kwargs.get("access_log")
 
     monkeypatch.setattr("uvicorn.run", fake_run)
 
@@ -125,4 +126,5 @@ def test_the_entrypoint_binds_to_the_configured_host_and_port(monkeypatch) -> No
     assert calls["app"] == "pdfextractor.main:app"
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 9123
+    assert calls["access_log"] is False
     get_settings.cache_clear()

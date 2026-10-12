@@ -28,7 +28,7 @@ from pdfextractor.infrastructure.middleware.middlewares import (
     RequestIdMiddleware,
     SizeBackstopMiddleware,
 )
-from pdfextractor.infrastructure.telemetry.logging_ import configure_logging
+from pdfextractor.infrastructure.telemetry.logging_ import configure_logging, flush_logging
 from pdfextractor.infrastructure.telemetry.metrics import create_metrics
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
 from pdfextractor.presentation.api.v1 import extract as extract_api
@@ -97,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             extractor.close()
+            flush_logging()
 
     app = FastAPI(
         title="pdfextractor",

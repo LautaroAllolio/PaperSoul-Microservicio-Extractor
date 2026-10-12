@@ -54,14 +54,18 @@ Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 Modo desarrollo:
 
 ```bash
-uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --reload
+uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --reload --no-access-log
 ```
 
 Modo producción (sin reload):
 
 ```bash
-uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001
+uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --no-access-log
 ```
+
+El servicio emite su propio log JSON estructurado por request; `--no-access-log`
+evita la línea duplicada del access log de uvicorn (la entrada de contenedor
+`python -m pdfextractor` ya lo desactiva).
 
 ## Contrato público
 

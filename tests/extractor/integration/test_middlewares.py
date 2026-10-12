@@ -9,14 +9,23 @@ timeout, so a stalled job answers ``504 {"error": "timeout"}`` without holding
 the request forever.
 """
 
+import json
+import logging
+
 import httpx
+import pytest
 from _workers import stalled_job
 from fastapi import FastAPI
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 
 from pdfextractor.application.errors import ExtractionTimeoutError, PdfExtractorError
 from pdfextractor.application.services.extraction_service import ExtractionService
 from pdfextractor.infrastructure.concurrency.pool import ProcessPoolTextExtractor
 from pdfextractor.infrastructure.config.settings import Settings
+from pdfextractor.infrastructure.middleware.middlewares import RequestIdMiddleware
+from pdfextractor.infrastructure.telemetry.logging_ import JsonFormatter
 from pdfextractor.main import create_app
 from pdfextractor.presentation.api.deps import EXTRACTION_SERVICE
 
@@ -127,3 +136,78 @@ async def test_unmapped_exceptions_degrade_to_a_generic_500_outside_the_route() 
     assert response.status_code == 500
     assert response.json() == {"error": "internal"}
     assert "secret" not in response.text
+
+
+class _Capturing(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(self.format(record))
+
+
+@pytest.fixture
+def captured_logs() -> _Capturing:
+    logger = logging.getLogger("pdfextractor.http")
+    logger.setLevel(logging.DEBUG)
+    handler = _Capturing()
+    handler.setFormatter(JsonFormatter())
+    logger.addHandler(handler)
+    logger.propagate = False
+    yield handler
+    logger.removeHandler(handler)
+
+
+class _SpyMetrics:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def observe_request(self, status: int, method: str) -> None:
+        self.calls.append((method, status))
+
+
+async def test_probe_paths_do_not_emit_request_logs(client, captured_logs) -> None:
+    await client.get("/health")
+    await client.get("/ready")
+
+    paths = [json.loads(line)["path"] for line in captured_logs.lines]
+    assert "/health" not in paths
+    assert "/ready" not in paths
+
+
+async def test_probe_paths_still_echo_the_request_id(client) -> None:
+    response = await client.get("/health", headers={"X-Request-Id": "probe-123"})
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "probe-123"
+
+
+async def test_probe_paths_are_excluded_from_request_metrics() -> None:
+    async def health(_request):
+        return PlainTextResponse("ok")
+
+    spy = _SpyMetrics()
+    app = Starlette(routes=[Route("/health", health)])
+    app.add_middleware(RequestIdMiddleware, metrics=spy)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/health")
+
+    assert spy.calls == []
+
+
+async def test_non_probe_paths_are_counted_in_request_metrics() -> None:
+    async def other(_request):
+        return PlainTextResponse("ok")
+
+    spy = _SpyMetrics()
+    app = Starlette(routes=[Route("/other", other)])
+    app.add_middleware(RequestIdMiddleware, metrics=spy)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/other")
+
+    assert spy.calls == [("GET", 200)]

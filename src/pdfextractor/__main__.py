@@ -14,7 +14,12 @@ __all__ = ["main"]
 def main() -> None:
     """Run uvicorn on the host and port resolved from the environment."""
     settings = get_settings()
-    uvicorn.run("pdfextractor.main:app", host=settings.host, port=settings.port)
+    uvicorn.run(
+        "pdfextractor.main:app",
+        host=settings.host,
+        port=settings.port,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

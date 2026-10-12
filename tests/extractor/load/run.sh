@@ -158,7 +158,7 @@ if [[ "${USE_EXTERNAL}" -eq 0 ]]; then
     PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS="${LOAD_QUEUE_TIMEOUT_SECONDS}" \
       uv run uvicorn --factory pdfextractor.main:create_app \
         --host 127.0.0.1 --port "${PDFEXTRACTOR_PORT}" \
-        --log-level warning
+        --log-level warning --no-access-log
   ) >"${SERVER_LOG}" 2>&1 &
   SERVER_PID=$!
   wait_for_health "${TARGET_BASE_URL}"

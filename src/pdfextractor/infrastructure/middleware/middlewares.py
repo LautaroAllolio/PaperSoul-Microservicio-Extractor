@@ -26,6 +26,8 @@ _REQUEST_ID = b"x-request-id"
 _CORRELATION_ID = b"x-correlation-id"
 _LOGGER = logging.getLogger("pdfextractor.http")
 
+_PROBE_PATHS = frozenset({"/health", "/ready"})
+
 
 class RequestIdMiddleware:
     """Mint or inherit the correlation id, log it, echo it and count the request.
@@ -33,7 +35,9 @@ class RequestIdMiddleware:
     The id is parked on the request so the ``get_request_id`` dependency and
     the downstream call share one value. The log record carries only surfaced
     fields — the uptime, the upload length and any outcome parked by the route
-    — never document bytes or filenames.
+    — never document bytes or filenames. Probes (``/health``, ``/ready``) keep
+    the echo but skip the log and the metric so a busy event loop wastes no work
+    on liveness traffic.
     """
 
     def __init__(self, app: ASGIApp, metrics: Metrics | None = None) -> None:
@@ -59,22 +63,6 @@ class RequestIdMiddleware:
         async def send_with_request_id(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 status = message["status"]
-                duration_ms = (time.perf_counter() - started) * 1000.0
-                if self._metrics is not None:
-                    self._metrics.observe_request(status=status, method=scope["method"])
-                fields: dict[str, Any] = {
-                    "request_id": request_id,
-                    "method": scope["method"],
-                    "path": scope["path"],
-                    "status": status,
-                    "duration_ms": round(duration_ms, 3),
-                }
-                if declared_bytes is not None:
-                    fields["bytes"] = declared_bytes
-                for key in ("outcome", "error_type", "pages"):
-                    if key in state:
-                        fields[key] = state[key]
-                _LOGGER.info("request", extra=fields)
                 headers = [
                     header
                     for header in message["headers"]
@@ -82,6 +70,23 @@ class RequestIdMiddleware:
                 ]
                 headers.append((echo_header, request_id.encode("latin-1")))
                 message["headers"] = headers
+                if scope["path"] not in _PROBE_PATHS:
+                    duration_ms = (time.perf_counter() - started) * 1000.0
+                    if self._metrics is not None:
+                        self._metrics.observe_request(status=status, method=scope["method"])
+                    fields: dict[str, Any] = {
+                        "request_id": request_id,
+                        "method": scope["method"],
+                        "path": scope["path"],
+                        "status": status,
+                        "duration_ms": round(duration_ms, 3),
+                    }
+                    if declared_bytes is not None:
+                        fields["bytes"] = declared_bytes
+                    for key in ("outcome", "error_type", "pages"):
+                        if key in state:
+                            fields[key] = state[key]
+                    _LOGGER.info("request", extra=fields)
             await send(message)
 
         await self._app(scope, receive, send_with_request_id)
