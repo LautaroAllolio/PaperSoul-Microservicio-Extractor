@@ -88,14 +88,33 @@ trap cleanup EXIT INT TERM
 
 # Largest RSS among the processes serving the port: `uv run` adds a small parent
 # process, and the uvicorn worker is the one whose memory we actually care about.
+# Sample RSS of the whole service tree (main + forkserver + resource_tracker + workers).
 server_rss_kb() {
-  local best=0 pid rss
-  while read -r pid; do
-    [[ -z "${pid}" ]] && continue
-    rss="$(awk '/^VmRSS:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || echo 0)"
-    if [[ "${rss}" -gt "${best}" ]]; then best="${rss}"; fi
-  done < <(pgrep -f "uvicorn.*pdfextractor\.main" 2>/dev/null || true)
-  echo "${best}"
+  local total=0 pid rss sid main
+  main="$(pgrep -f "uvicorn.*pdfextractor\.main:create_app" 2>/dev/null | head -1)"
+  if [[ -z "${main}" ]]; then
+    main="$(pgrep -f "uvicorn.*pdfextractor\.main" 2>/dev/null | head -1)"
+  fi
+  if [[ -n "${main}" ]] && [[ -r "/proc/${main}/stat" ]]; then
+    sid="$(awk '{print $6}' "/proc/${main}/stat" 2>/dev/null || echo "")"
+  fi
+  for pid in /proc/[0-9]*/; do
+    pid=${pid#/proc/}; pid=${pid%/}
+    [[ -n "${sid}" ]] && [[ -r "/proc/${pid}/stat" ]] && awk -v p="$pid" -v sid="$sid" '{if($6==sid && $1==p){exit 0}else{exit 1}}' "/proc/${pid}/stat" 2>/dev/null && {
+      rss="$(awk '/^VmRSS:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || echo 0)"
+      [[ -n "${rss}" ]] && total=$((total + rss))
+      continue
+    }
+    [[ -r "/proc/${pid}/cmdline" ]] || continue
+    cmdline="$(tr '\0' ' ' </proc/${pid}/cmdline 2>/dev/null)"
+    if [[ "${cmdline}" == *"pdfextractor"* ]] || [[ "${cmdline}" == *"multiprocessing.forkserver"* ]] || [[ "${cmdline}" == *"multiprocessing.resource_tracker"* ]] || [[ "${cmdline}" == *"uvicorn"* && "${cmdline}" == *"pdfextractor"* ]]; then
+      rss="$(awk '/^VmRSS:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || echo 0)"
+      [[ -n "${rss}" ]] && total=$((total + rss))
+      continue
+    fi
+  done
+  echo "${total}"
+
 }
 
 wait_for_health() {

@@ -332,6 +332,17 @@ subsección es un A/B pareado `load-tests/load-test.js -e K6_SCENARIO=extract_ba
 sobre el mismo host; la corrida de referencia de § 3.1 corresponde al binario
 previo a TASK-28.
 
+### 3.7 Soak T16 (RSS del árbol de procesos)
+
+El sampler fue ampliado para sumar el RSS de todo el árbol (main + forkserver + resource_tracker + workers) por SID.
+
+Resultados (configuración determinista: `MAX_CONCURRENT_EXTRACTIONS=4`, `QUEUE_TIMEOUT_SECONDS=2`, `MAX_UPLOAD_BYTES=1048576`, `METRICS_ENABLED=true`, `WARMUP=true`):
+
+- `load-tests/run-9000/soak-rss.csv` — serie temporal `epoch_s,rss_kb` (84 muestras)
+- RSS total: first 412.2 MB, last 476.1 MB, min 412.2 MB, max 480.5 MB, delta +64.0 MB; ~35.2 MB/min en la ventana medida
+
+**Veredicto:** deriva ascendente moderada, sin meseta clara en la ventana medida. T16 cerrada con hallazgos.
+
 ## 4. Análisis
 
 ### 4.1 Capacidad y rodilla

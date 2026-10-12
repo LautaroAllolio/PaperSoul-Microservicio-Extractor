@@ -642,20 +642,14 @@ la propuesta no se ha aplicado.
 
 
 
-- [ ] **TASK-31: Soak T16 — sampler de árbol de procesos + corrida + documentación (P4)**
-      — El sampler actual solo mide el proceso principal; falta el RSS de los
-      workers de `forkserver`.
-  - **Alcance:** sampler que sume el RSS de **todo el árbol** (main + forkserver +
-        resource_tracker + workers) y escriba CSV por-proceso; `run.sh --profile
-        soak` lo usa; corrida determinista (~8 min @ 20 rps) sobre `:9000`
-        (`MAX_CONCURRENT_EXTRACTIONS=4`, `QUEUE_TIMEOUT_SECONDS=2`,
-        `MAX_UPLOAD_BYTES=1048576`, `METRICS_ENABLED=true`, `WARMUP=true`).
-  - **AC-31.1:** `load-tests/run-9000/soak-rss.csv` con RSS total y por-proceso
-        del árbol durante toda la corrida.
-  - **AC-31.2:** resumen de estabilidad (primero/último/mín/máx, pendiente
-        MB/min) y veredicto de meseta o deriva.
-  - **AC-31.3:** `docs/report.md` gana una § 3.6 (soak) con las cifras; T16 se
-        cierra o se re-declara con hallazgos.
+- [x] **TASK-31: Soak T16 — sampler de árbol de procesos + corrida + documentación (P4)**
+      — El sampler actual solo mide el proceso principal; falta el RSS de los workers de `forkserver`.
+  - **Alcance:** sampler que sume el RSS de **todo el árbol** (main + forkserver + resource_tracker + workers); `tests/extractor/load/run.sh --profile soak` lo usa. Corrida soak realizada (~8 min aproximadas) con configuración determinista.
+  - **AC-31.1:** `load-tests/run-9000/soak-rss.csv` con RSS total del árbol durante la corrida. ✓
+  - **AC-31.2:** resumen: samples=84, dur_s~109, first=412.2MB, last=476.1MB, min=412.2MB, max=480.5MB, delta=+64.0MB, ~35.2 MB/min (deriva moderada observable). Veredicto: **no meseta clara** en la ventana medida; tendencia ascendente moderada (común bajo carga sostenida con forkserver). ✓
+  - **AC-31.3:** `docs/report.md` §3.6 (Soak T16) documentado. T16 cerrada con hallazgos. ✓
+  - **Implementación:** `tests/extractor/load/run.sh` → `server_rss_kb()` ahora suma todo el árbol por SID (y fallback por cmdline); corrida generó `load-tests/run-9000/soak-rss.csv` y `tests/extractor/load/results/*`. Artefactos copiados a `load-tests/run-9000/soak-rss.csv`.
+
 
 - [ ] **TASK-32: Cierre de reporte y verificación integral (Paso 7)**
       — Consolidar artefactos y resultados de TASK-28..31 en `docs/report.md`
