@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -80,6 +81,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.extractor = extractor
         app.state.pool = BufferPool(capacity=resolved.effective_max_concurrent_extractions)
+        app.state.thread_executor = ThreadPoolExecutor(
+            max_workers=resolved.effective_max_concurrent_extractions,
+            thread_name_prefix="pdfextractor-t",
+        )
         app.state.metrics = bundle
         setattr(
             app.state,
@@ -97,6 +102,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             extractor.close()
+            thread_exec = getattr(app.state, "thread_executor", None)
+            if thread_exec is not None:
+                thread_exec.shutdown(wait=True, cancel_futures=True)
             flush_logging()
 
     app = FastAPI(

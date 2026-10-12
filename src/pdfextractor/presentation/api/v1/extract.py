@@ -66,7 +66,9 @@ async def extract_document(
             sink=sink,
         )
         started = time.perf_counter()
-        result = await asyncio.to_thread(service.extract, buffer)
+        loop = asyncio.get_running_loop()
+        thread_exec = request.app.state.thread_executor
+        result = await loop.run_in_executor(thread_exec, service.extract, buffer)
         duration = time.perf_counter() - started
         request.scope.setdefault("state", {})["outcome"] = "ok"
         request.scope.setdefault("state", {})["pages"] = result.page_count

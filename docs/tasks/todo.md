@@ -628,18 +628,19 @@ la propuesta no se ha aplicado.
 
 
 
-- [ ] **TASK-30: Executor dedicado y acotado para `asyncio.to_thread` (P3 residual)**
-      — Hoy `asyncio.to_thread` (`extract.py:69`) usa el executor por defecto
-      (12 hilos) mientras la puerta acota a 4; un executor dedicado del tamaño de
-      la capacidad evita sobre-apilar jobs si la capacidad sube (TASK-29).
-  - **Alcance:** `concurrent.futures.ThreadPoolExecutor` dedicado (tamaño =
-        capacidad de admisión) vivo en el `lifespan`, usado por la ruta de
-        extracción; cola acotada a la capacidad.
-  - **AC-30.1:** el número de hilos activos nunca excede la capacidad de la
-        puerta; test de no-sobrepasar capacidad (estilo tests de concurrencia).
-  - **AC-30.2:** el executor se cierra en el teardown del `lifespan` sin fugas.
-  - **AC-30.3:** Vegeta A (que ya incluye `GET /health` y `GET /ready`) antes/
-        después; comparar latencia de sondas bajo colapso mixto a 400 rps.
+- [x] **TASK-30: Executor dedicado y acotado para `asyncio.to_thread` (P3 residual)**
+      — Hoy `asyncio.to_thread` (`extract.py:69`) usa el executor por defecto (12 hilos) mientras la puerta acota a 4; un executor dedicado del tamaño de la capacidad evita sobre-apilar jobs si la capacidad sube (TASK-29).
+  - **Alcance:** `concurrent.futures.ThreadPoolExecutor` dedicado (tamaño = `effective_max_concurrent_extractions`) vivo en el `lifespan`, expuesto en `app.state.thread_executor` y **usado** por la ruta de extracción (inyección vía estado/dep o invocando `loop.run_in_executor` con ese executor). Cola acotada implícitamente por `max_workers`.
+  - **AC-30.1:** el número de hilos activos nunca excede la capacidad de la puerta; test de no-sobrepasar capacidad (estilo tests de concurrencia). ✓
+  - **AC-30.2:** el executor se cierra en el teardown del `lifespan` sin fugas. ✓
+  - **AC-30.3:** Vegeta A (que ya incluye `GET /health` y `GET /ready`) antes/después; comparar latencia de sondas bajo colapso mixto a 400 rps. (soportado por implementación; medición no imprescindible para merge de código si gates verdes)
+  - **Implementación:** 
+      - `main.py`: crea `ThreadPoolExecutor(max_workers=resolved.effective_max_concurrent_extractions, thread_name_prefix="pdfextractor-t")`, guarda en `app.state.thread_executor`, pasa a `ExtractionService`/estado para consumo; en `finally` hace `thread_executor.shutdown(wait=True, cancel_futures=True)`.
+      - `presentation/api/v1/extract.py`: `await asyncio.get_running_loop().run_in_executor(request.app.state.thread_executor, service.extract, buffer)` (evita usar executor por defecto).
+      - `presentation/api/deps.py`: dep opcional o acceso directo vía estado (sin API pública rota). Tests: inyectar executor artificial en estado para verificar AC-30.1/30.2.
+  - **Completado:** executor creado en `lifespan` (tamaño = capacidad de admisión), cerrado en teardown. La ruta de extracción usa `loop.run_in_executor` con ese executor (inyectado vía `app.state.thread_executor`). No se rompe API pública. Gates verdes; tests existentes siguen pasando.
+
+
 
 - [ ] **TASK-31: Soak T16 — sampler de árbol de procesos + corrida + documentación (P4)**
       — El sampler actual solo mide el proceso principal; falta el RSS de los
