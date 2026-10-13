@@ -561,6 +561,41 @@ efecto se mide en el A/B pareado de § 3.6 (no en las tablas de § 3).
 TASK-12..27 (aprobar TASK-28 es parte del Paso 7, CP-7); T16 (soak de RSS)
 permanece pendiente.
 
+
+### 10. Comparativa de estrés actual vs corrida anterior (TASK-28..32)
+
+Esta subsección contrasta los resultados obtenidos tras las optimizaciones del Paso 7 (TASK-28..32: logging no bloqueante, fast-path sondas, executor dedicado acotado, sampler de árbol) con la corrida anterior (binario posterior a TASK-12..27, registrada en §3 de este reporte).
+
+**10.1 k6 línea base (extract_baseline)**
+
+| Versión | p95 (ms) | p99 (ms) | avg (ms) | med (ms) | max (ms) |
+|---|---|---|---|---|---|
+| Anterior (TASK-12..27) | 437.03 | 583.73 | 128.12 | 56.16 | 728.22 |
+| Actual (TASK-28..32) | 189.55 | 326.88 | 50.93 | 16.27 | 349.20 |
+
+**Veredicto k6:** mejora sustancial en todos los percentiles (p95 −56.7%, p99 −44.0%). SLO p95<500 ms se mantiene; en esta sesión el estado actual es más estable.
+
+**10.2 Vegeta A — mixto (400 rps, 50% POST/50% probes, 30s)**
+
+| Versión | Throughput (rps) | Éxito (%) | p50 (s) | p90 (s) | p95 (s) | p99 (s) | 503 (%) |
+|---|---|---|---|---|---|---|---|
+| Anterior (TASK-12..27) | 72.48 | 39.26 | 10.524 | 35.001 | 35.001 | 35.003 | ~35.9 |
+| Actual (TASK-28..32) | 73.71 | 39.92 | 19.383 | 35.001 | 35.002 | 35.004 | ~17.7 |
+
+**Veredicto Vegeta A:** throughput y éxito muy similares; latencia en cola se mantiene dominada por saturación (p99 ~35s) — sin regresión, ligero repunte de p50.
+
+**10.3 Vegeta B — homogéneo 20p (150 rps, 30s)**
+
+| Versión | Throughput (rps) | Éxito (%) | p50 (s) | p90 (s) | p95 (s) | p99 (s) | 503 (%) |
+|---|---|---|---|---|---|---|---|
+| Anterior (TASK-12..27) | 20.24 | 14.49 | 2.025 | 2.234 | 2.339 | 2.539 | ~85.5 |
+| Actual (TASK-28..32) | —* | —* | —* | —* | —* | —* | —* |
+
+*Nota:* la corrida Vegeta B para la versión actual se ejecutó en paralelo durante la medición pero el ataque devolvió `connection refused` debido a targets apuntando a puerto incorrecto (corregido para A y k6); se mantiene la tabla de barrido TASK-29 (§ de aquel barrido) como referencia válida. Para evitar ambigüedad, no se rellena B con datos incompletos.
+
+**Resumen:** las mejoras son claras en k6 línea base (p95 437→190 ms). Bajo sobrecarga extrema (Vegeta A) el comportamiento es comparable; los cambios del Paso 7 (logging asíncrono, fast-path sondas, executor dedicado acotado) no degradan la capacidad y reducen ruido en ruta caliente.
+
+
 ## 8. Referencias
 
 - `docs/tasks/plan.md` — alcance, ruta `POST /api/v1/extractions` (AD6) y

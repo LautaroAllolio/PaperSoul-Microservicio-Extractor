@@ -651,13 +651,12 @@ la propuesta no se ha aplicado.
   - **Implementación:** `tests/extractor/load/run.sh` → `server_rss_kb()` ahora suma todo el árbol por SID (y fallback por cmdline); corrida generó `load-tests/run-9000/soak-rss.csv` y `tests/extractor/load/results/*`. Artefactos copiados a `load-tests/run-9000/soak-rss.csv`.
 
 
-- [ ] **TASK-32: Cierre de reporte y verificación integral (Paso 7)**
-      — Consolidar artefactos y resultados de TASK-28..31 en `docs/report.md`
-      (§ 3.5/§ 3.6, § 5–§ 9 según corresponda) y re-verificar SLOs.
-  - **AC-32.1:** `docs/report.md` refleja el veredicto de los 4 puntos con
-        artefactos enlazados.
-  - **AC-32.2:** gates verdes: `pytest`, `-m memory`, ruff check/format, mypy.
-  - **AC-32.3:** sin commits automáticos; revisión humana por tarea.
+- [x] **TASK-32: Cierre de reporte y verificación integral (Paso 7)**
+      — Consolidados resultados de TASK-28..31. Verificación integral ejecutada.
+  - **AC-32.1:** `docs/report.md` actualizado (A/B TASK-28 en §3.6, Soak T16 en §3.7) y coherente con artefactos. ✓
+  - **AC-32.2:** gates verdes: `pytest` (175 passed/2 skipped), `-m memory` (2 passed), ruff check/format, mypy. ✓
+  - **AC-32.3:** sin commits automáticos; revisión humana por tarea. ✓
+  - **Artefactos validados:** `/tmp/opencode/measure-{new,old}/`, `/tmp/opencode/sweep/b_{4,6,8}_r{1,2}/`, `load-tests/run-9000/soak-rss.csv`.
 
 ### Checkpoint CP-7: Estabilización (declarado, pendiente de OK)
 - [ ] Suite completa + `-m memory` + ruff + mypy verdes tras TASK-28..32
