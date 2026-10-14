@@ -595,6 +595,67 @@ Esta subsección contrasta los resultados obtenidos tras las optimizaciones del 
 
 **Resumen:** las mejoras son claras en k6 línea base (p95 437→190 ms). Bajo sobrecarga extrema (Vegeta A) el comportamiento es comparable; los cambios del Paso 7 (logging asíncrono, fast-path sondas, executor dedicado acotado) no degradan la capacidad y reducen ruido en ruta caliente.
 
+**10.4 Barrido de concurrencia `N ∈ {6,7,8}` bajo sobrecarga mixta (TASK-33..35)**
+
+Con `httptools` habilitado (TASK-33) y el fast-path de sondas (TASK-34) en su sitio, se ejecutó el barrido controlado del arnés **Vegeta A** (400 rps, 50 % POST / 50 % probes, 30 s, timeout 35 s) para `N ∈ {6,7,8}`, **2 repeticiones** por `N`, reiniciando el servicio entre valores de `N` (script `load-tests/sweep-mixed.sh`; artefactos en `load-tests/run-9000/sweep-N6-N7-N8/`, gitignored).
+
+| N | rep | Éxito (%) | Throughput (rps) | p50 (s) | p90 (s) | p95 (s) | p99 (s) | max (s) | 200 | 503 | 0 (cliente) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 6 | r1 | 42.27 | 78.03 | 20.632 | 35.001 | 35.001 | 35.002 | 35.017 | 5072 | 1754 | 5174 |
+| 6 | r2 | 47.92 | 88.46 | 3.801 | 35.001 | 35.001 | 35.001 | 35.013 | 5750 | 3724 | 2526 |
+| 7 | r1 | 52.18 | 96.33 | 11.597 | 35.001 | 35.001 | 35.002 | 35.037 | 6261 | 1698 | 4041 |
+| 7 | r2 | 49.25 | 90.93 | 14.213 | 35.001 | 35.001 | 35.002 | 35.045 | 5910 | 1362 | 4728 |
+| 8 | r1 | 44.52 | 82.19 | 10.282 | 35.001 | 35.001 | 35.003 | 35.029 | 5342 | 3174 | 3484 |
+| 8 | r2 | 47.14 | 87.03 | 7.168 | 35.001 | 35.001 | 35.003 | 35.022 | 5657 | 3606 | 2737 |
+| **6** | **prom.** | **45.09** | **83.25** | — | — | — | 35.002 | — | — | — | — |
+| **7** | **prom.** | **50.72** | **93.63** | — | — | — | 35.002 | — | — | — | — |
+| **8** | **prom.** | **45.83** | **84.61** | — | — | — | 35.003 | — | — | — | — |
+
+**Veredicto:** **ningún `N` alcanza el 75 %.** El mejor promedio es `N=7` (50.72 %). El `p90/p95/p99` está clavado en `35.001 s` —el timeout del cliente—, lo que indica que una fracción dominante de peticiones **nunca recibe respuesta** dentro de los 35 s (código `0`: 2526–5174, 21–43 % del total). Subir `N` (tamaño del pool) **no** mueve la aguja: el cuello no es la capacidad de extracción.
+
+**10.5 Diagnóstico y modelo multi-réplica: el cuello es el *event loop* por instancia**
+
+Se aislaron las dos clases de tráfico del arnés mixto (mismo host, `N=7`):
+
+| Escenario | Éxito (%) | Throughput (rps) | Códigos |
+|---|---|---|---|
+| Solo GET (`/health`,`/ready`,`/metrics`), 400 rps, **sin body** | **100.00** | 400.0 | 200: 12000 |
+| Solo POST, 200 rps, body 55 KB | **94.08** | 176.3 | 200: 5645, 503: 355 |
+| Mixto 400 rps (200 POST + 200 probes) | ~49 | ~90 | 200 / 503 / **0** |
+
+Por separado, las sondas son gratis (100 % a 400 rps) y el extractor sostiene **94 % a 200 rps** (~176 rps efectivos). Pero **combinados a 400 rps el sistema colapsa**. El muestreo de CPU durante la corrida mixta lo explica:
+
+- El **event loop de Uvicorn sube de 25 % a ~96 % de un núcleo** (única CPU ocupada).
+- Los **workers del pool** (extracción) quedan ~inactivos.
+- Vegeta usa 25–78 % de un núcleo; la carga del host es solo ~3.5 de 8 núcleos.
+
+El cuello es el **event loop monohilo** (framing HTTP + parser multipart en Python puro, ~11 MB/s) —no la extracción, no el host—. Al saturarse, la concurrencia en vuelo se dispara (Ley de Little: a 400 rps y 35 s de timeout caben ~14 000 peticiones) y el servicio entra en un colapso por timeouts. El tamaño del pool (`N`) no puede aliviar el loop.
+
+**Curva de capacidad por instancia** (arnés mixto, `N=7`, una instancia limpia):
+
+| R ofrecidos (mixto rps) | Éxito (%) | Throughput (rps) | p50 (s) | p99 (s) | Códigos |
+|---|---|---|---|---|---|
+| 100 | 100.00 | 100.0 | 0.01 | 0.05 | 200: 3000 |
+| 150 | 99.82 | 149.6 | 0.01 | 0.07 | 200: 4492, 503: 8 |
+| 200 | 98.88 | 197.7 | 0.01 | 0.15 | 200: 5933, 503: 67 |
+| 250 | 92.84 | 231.6 | 0.02 | 0.11 | 200: 6963, 503: 537 |
+| 300 | **51.53** | 71.4 | 9.80 | 35.00 | 200: 4638, 503: 1928, 0: 2434 |
+
+La **rodilla está en ~250–270 rps** por instancia: hasta 250 rps el servicio responde ≥92 %; a 300 rps colapsa. Presupuesto seguro por instancia: **≤200 rps (≈99 %)**.
+
+**Modelo multi-réplica + Traefik.** Los 400 rps de Vegeta A no son una meta *por contenedor* sino una demanda **agregada**. Con `k` réplicas tras Traefik (round-robin; el servicio es *stateless*), cada instancia recibe `400/k` rps:
+
+- `k = ceil(400 / 200) = 2` → ~99 % por instancia (margen: `≤250` rps aún da ~93 %).
+- Se recomienda **`k = 3`** por HA y holgura (≈133 rps/instancia), para tolerar la caída de una réplica o un reparto desigual.
+
+**Validación multi-réplica** (réplicas co-ubicadas en este mismo host de 8 núcleos / 3.8 GB —cota inferior, penalizada por compartir CPU—):
+
+| Configuración | Éxito (%) | p99 (s) | 0 (cliente) |
+|---|---|---|---|
+| 2 réplicas × 200 rps (400 total) — 4 corridas | 82.77 / 79.71 / 74.62 / 74.15 | ~2.1 | 0 |
+| 3 réplicas × 133 rps (399 total) | 78.13 | 2.21 | 0 |
+
+**Veredicto:** repartir la demanda entre ≥2 réplicas sitúa el agregado en **~75–83 %** (cota inferior con todas las réplicas en un host; en contenedores separados cada una sigue su curva de instancia, ~99 % a 200 rps), **con backpressure limpia** (`p99 ≈ 2 s`, el timeout de cola) y **cero timeouts de cliente** —frente al colapso a 35 s de una sola instancia—. El hardening opcional (TASK-37) acota la concurrencia del event loop para que una instancia aislada degradada falle rápido con `503` en lugar de colapsar.
 
 ## 8. Referencias
 
