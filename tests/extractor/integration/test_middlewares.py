@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
+from starlette.types import Scope
 
 from pdfextractor.application.errors import ExtractionTimeoutError, PdfExtractorError
 from pdfextractor.application.services.extraction_service import ExtractionService
@@ -211,3 +212,30 @@ async def test_non_probe_paths_are_counted_in_request_metrics() -> None:
         await client.get("/other")
 
     assert spy.calls == [("GET", 200)]
+
+
+async def test_probe_paths_short_circuit_before_the_content_length_scan(monkeypatch) -> None:
+    from pdfextractor.infrastructure.middleware import middlewares
+
+    scanned: list[str] = []
+    original = middlewares._declared_content_length
+
+    def spy(scope: Scope) -> int | None:
+        scanned.append(scope["path"])
+        return original(scope)
+
+    monkeypatch.setattr(middlewares, "_declared_content_length", spy)
+
+    async def handler(_request):
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/health", handler), Route("/other", handler)])
+    app.add_middleware(RequestIdMiddleware)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        probe = await client.get("/health", headers={"X-Request-Id": "probe-1"})
+        await client.get("/other")
+
+    assert probe.headers["x-request-id"] == "probe-1"
+    assert scanned == ["/other"]

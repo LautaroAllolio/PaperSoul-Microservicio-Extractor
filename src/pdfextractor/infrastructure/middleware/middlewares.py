@@ -35,9 +35,9 @@ class RequestIdMiddleware:
     The id is parked on the request so the ``get_request_id`` dependency and
     the downstream call share one value. The log record carries only surfaced
     fields — the uptime, the upload length and any outcome parked by the route
-    — never document bytes or filenames. Probes (``/health``, ``/ready``) keep
-    the echo but skip the log and the metric so a busy event loop wastes no work
-    on liveness traffic.
+    — never document bytes or filenames. Probes (``/health``, ``/ready``) take a
+    short-circuit path that echoes the id and nothing else, so a saturated event
+    loop spends no timer, body-length scan, log or metric on liveness traffic.
     """
 
     def __init__(self, app: ASGIApp, metrics: Metrics | None = None) -> None:
@@ -47,6 +47,14 @@ class RequestIdMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
+            return
+
+        # Probes short-circuit before any expensive work: they only need the
+        # correlation-id echo, never the timer, the body-length scan, the log or
+        # the metric. This keeps liveness/readiness nearly free under an overload
+        # that saturates the event loop (400 rps mixed).
+        if scope["path"] in _PROBE_PATHS:
+            await self._serve_probe(scope, receive, send)
             return
 
         started = time.perf_counter()
@@ -70,26 +78,47 @@ class RequestIdMiddleware:
                 ]
                 headers.append((echo_header, request_id.encode("latin-1")))
                 message["headers"] = headers
-                if scope["path"] not in _PROBE_PATHS:
-                    duration_ms = (time.perf_counter() - started) * 1000.0
-                    if self._metrics is not None:
-                        self._metrics.observe_request(status=status, method=scope["method"])
-                    fields: dict[str, Any] = {
-                        "request_id": request_id,
-                        "method": scope["method"],
-                        "path": scope["path"],
-                        "status": status,
-                        "duration_ms": round(duration_ms, 3),
-                    }
-                    if declared_bytes is not None:
-                        fields["bytes"] = declared_bytes
-                    for key in ("outcome", "error_type", "pages"):
-                        if key in state:
-                            fields[key] = state[key]
-                    _LOGGER.info("request", extra=fields)
+                duration_ms = (time.perf_counter() - started) * 1000.0
+                if self._metrics is not None:
+                    self._metrics.observe_request(status=status, method=scope["method"])
+                fields: dict[str, Any] = {
+                    "request_id": request_id,
+                    "method": scope["method"],
+                    "path": scope["path"],
+                    "status": status,
+                    "duration_ms": round(duration_ms, 3),
+                }
+                if declared_bytes is not None:
+                    fields["bytes"] = declared_bytes
+                for key in ("outcome", "error_type", "pages"):
+                    if key in state:
+                        fields[key] = state[key]
+                _LOGGER.info("request", extra=fields)
             await send(message)
 
         await self._app(scope, receive, send_with_request_id)
+
+    async def _serve_probe(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Echo the correlation id on a probe without logging or counting it."""
+        inbound = _inbound_correlation_id(scope)
+        if inbound is None:
+            echo_header, request_id = _REQUEST_ID, uuid.uuid4().hex
+        else:
+            echo_header, request_id = inbound
+        request_id_bytes = request_id.encode("latin-1")
+
+        async def echo_request_id(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    header
+                    for header in message["headers"]
+                    if header[0] not in (_REQUEST_ID, _CORRELATION_ID)
+                ]
+                headers.append((echo_header, request_id_bytes))
+                message["headers"] = headers
+            await send(message)
+
+        await self._app(scope, receive, echo_request_id)
 
 
 class SizeBackstopMiddleware:
