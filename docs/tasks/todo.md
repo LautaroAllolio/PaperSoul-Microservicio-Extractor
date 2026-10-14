@@ -751,50 +751,51 @@ la propuesta no se ha aplicado.
 **Riesgo:** Mínimo.
 **Completado:** nuevo helper `_serve_probe` (eco único) con guard al inicio de `__call__`. Commit `#66`.
 
-### TASK-35: Barrido controlado de concurrencia `N in {6,7,8}` con Vegeta A
+### TASK-35: Barrido controlado de concurrencia `N in {6,7,8}` con Vegeta A ✅
 
 **Descripción:** Ejecutar barrido reproducible con el mismo arnés (`load-tests/run-9000/targets-mixed.txt`, `body5p.bin`, boundary `----pdfextractorVegetaB0UNDARY`). Para cada `N` lanzar **2 repeticiones** de Vegeta A (400 rps, 30s, timeout 35s), reiniciando el servidor entre distintos valores de `N`. Guardar todos los artefactos.
 
 **Tamaño:** M (documentación + artefactos)
 
 **Aceptación:**
-- [ ] Crear `load-tests/run-9000/sweep-N6-N7-N8/` con subcarpetas `N6_r1,N6_r2,N7_r1,N7_r2,N8_r1,N8_r2`
-- [ ] Por corrida: `results-mixed.bin`, `results-mixed.json`, `vegeta-report-mixed.txt`, `server.log`
-- [ ] Generar tabla con: `N`, `rep`, `success%`, `p50(s)`, `p90(s)`, `p95(s)`, `p99(s)`, `max(s)`, `200`, `503`, `client_timeouts(0)`, `throughput_rps(effective)` + **promedio** por `N`
-- [ ] Elegir **menor N con `success% >= 75 %`** (en empate priorizar menor `p99`)
-- [ ] Documentar tabla en `docs/report.md` (§10.4)
+- [x] Crear `load-tests/run-9000/sweep-N6-N7-N8/` con subcarpetas `N6_r1,N6_r2,N7_r1,N7_r2,N8_r1,N8_r2`
+- [x] Por corrida: `results-mixed.bin`, `results-mixed.json`, `vegeta-report-mixed.txt`, `server.log`
+- [x] Generar tabla con: `N`, `rep`, `success%`, `p50(s)`, `p90(s)`, `p95(s)`, `p99(s)`, `max(s)`, `200`, `503`, `client_timeouts(0)`, `throughput_rps(effective)` + **promedio** por `N`
+- [x] Documentar tabla en `docs/report.md` (§10.4)
 
 **Verificación:**
-- [ ] Mismos targets/body/header en todas las corridas
-- [ ] Servidor reiniciado al cambiar `N`
-- [ ] Artefactos en `load-tests/run-9000/sweep-N6-N7-N8/`
-- [ ] Tabla clara y reproducible en `docs/report.md`
+- [x] Mismos targets/body/header en todas las corridas
+- [x] Servidor reiniciado al cambiar `N`
+- [x] Artefactos en `load-tests/run-9000/sweep-N6-N7-N8/`
+- [x] Tabla clara y reproducible en `docs/report.md`
+
+**Resultado:** **ningún `N` alcanza el 75 %.** Promedios: `N=6` 45.09 %, `N=7` **50.72 %** (mejor), `N=8` 45.83 %. El `p90/p95/p99` queda clavado en `35.001 s` (timeout de cliente) con 21–43 % de `0`s. El barrido de aislamiento (§10.5) demuestra que el cuello es el **event loop monohilo** (sube a ~96 % de un núcleo; el pool queda ~inactivo), no el tamaño del pool. **Pivote aprobado:** la meta de 400 rps se reencuadra como demanda **agregada** de un despliegue multi-réplica + Traefik (TASK-36), no como objetivo por contenedor.
 
 **Dependencias:** Ninguna (ideal con TASK-33; no bloquea)
 
-**Archivos tocados (propuestos):**
-- `docs/report.md`
+**Archivos tocados:**
+- `docs/report.md` (§10.4, §10.5)
+- `load-tests/sweep-mixed.sh` (script del barrido)
 
 **Riesgo:** Medio (tiempo de medición)
+**Completado:** curvas de capacidad y validación multi-réplica en §10.5.
 
-### TASK-36: Aplicar `N` elegido, validar >=75% y cerrar con gates verdes
+### TASK-36: Dimensionar por instancia y documentar el despliegue multi-réplica (Traefik)
 
-**Descripción:** Aplicar `N_elegido` (menor con >=75%), documentar tuning recomendado en `.env.example` y `README.md`, re-validar con Vegeta A y ejecutar verificación integral con todos los gates verdes.
+**Descripción:** Fijar el tuning por instancia (mantener `N=7`) y documentar la fórmula de réplicas para la demanda **agregada** de 400 rps, con Traefik al frente (round-robin; servicio *stateless*). Actualizar `.env.example` y `README.md` con el presupuesto por instancia (≤200 rps ≈99 %, rodilla ~250 rps), el número de réplicas (`k=2` mínimo, `k=3` recomendado por HA) y las sondas `health`/`ready` para el balanceador. No se usa escalado vertical intra-proceso (`--workers`): el escalado es horizontal por el orquestador.
 
-**Tamaño:** S (1–3 archivos)
+**Tamaño:** S (2–3 archivos)
 
 **Aceptación:**
-- [ ] Registrar `N_elegido` con justificación (success%, p99) en `docs/report.md`
-- [ ] Actualizar `.env.example` con comentario de valor recomendado para 8 vCPU
-- [ ] Actualizar `README.md` (Despliegue/Escalado) explicando trade-off `N` vs throughput/p99/RSS
-- [ ] Re-ejecutar Vegeta A con `N_elegido` (≥1 repetición, preferible 2) y confirmar `success% >= 75 %`
-- [ ] Actualizar `docs/report.md` con comparativa `N=4` vs `N_elegido`
+- [ ] Registrar en `docs/report.md` la curva por instancia y la fórmula `k = ceil(demanda / 200)` con la comparativa `N=4` (39 % mono-instancia) vs presupuesto multi-réplica
+- [ ] Actualizar `.env.example` con `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=7` y nota de capacidad por instancia (≤200 rps)
+- [ ] Actualizar `README.md` (Despliegue/Escalado) con el modelo multi-réplica + Traefik (round-robin, sin sticky; healthcheck `/health`, readiness `/ready`) y el trade-off `N`/réplicas vs throughput/p99/RSS
 - [ ] **Gates 100% verdes:** `pytest`, `pytest -m memory`, `ruff check`, `ruff format --check`, `mypy -p pdfextractor`
 
 **Verificación:**
-- [ ] `success% >= 75 %` confirmado con artefacto
-- [ ] Sin `500`, sin `504` nuevos
-- [ ] `p99` razonable (< 8–9s bajo colapso mixto)
+- [ ] `success%` agregado ≥75 % con el arnés multi-réplica (artefacto en §10.5)
+- [ ] `p99` ≈ 2 s (timeout de cola) y **cero timeouts de cliente** (`0`) en el régimen mixto
+- [ ] Sin `500` ni `504` nuevos
 - [ ] Todos los gates verdes
 
 **Dependencias:** TASK-35
@@ -806,9 +807,32 @@ la propuesta no se ha aplicado.
 
 **Riesgo:** Bajo
 
-### Checkpoint CP-8: Éxito >= 75% bajo saturación
-- [ ] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..36
-- [ ] `success% >= 75 %` confirmado con Vegeta A (`N_elegido`)
+### TASK-37: Hardening de degradación — acotar la concurrencia del event loop
+
+**Descripción:** Bajo sobrecarga de una instancia aislada (p. ej. una réplica que recibe ≥300 rps por reparto desigual o caída de otra), el event loop se satura y las peticiones terminan en timeouts de 35 s en lugar de `503` acotado. Acotar la concurrencia admitida en el event loop (límite de conexiones/tareas, o semáforo a la entrada del loop) para que la instancia **falle rápido con `503`** y preserve la salud del loop y de las sondas. Complementa el fail-fast de la puerta (TASK-12), que hoy actúa *después* de que el loop ya está saturado.
+
+**Tamaño:** M (1–2 archivos + tests)
+
+**Aceptación:**
+- [ ] Una instancia aislada a 400 rps mixtos no produce timeouts de cliente `0`: el exceso se rechaza con `503` acotado (~2 s)
+- [ ] `/health` y `/ready` permanecen responsivos (`200`) bajo esa sobrecarga
+- [ ] Sin cambios de contrato en el camino feliz (`200`)
+
+**Verificación:**
+- [ ] Vegeta A a 400 rps sobre una instancia: `0 = 0`, `p99 ≈ 2 s`
+- [ ] Gates 100% verdes (`pytest`, `-m memory`, `ruff`, `format`, `mypy`)
+
+**Dependencias:** TASK-35 (diagnóstico)
+
+**Archivos tocados (propuestos):**
+- `src/pdfextractor/__main__.py` / `main.py` / `middlewares.py`
+
+**Riesgo:** Medio (afecta la ruta caliente; requiere TDD y revisión)
+
+### Checkpoint CP-8: Éxito agregado >= 75% bajo saturación (multi-réplica)
+- [ ] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..37
+- [ ] `success%` agregado >= 75 % confirmado con el arnés multi-réplica + Traefik (`k = ceil(400/200)`)
+- [ ] `p99 ≈ 2 s` (backpressure de cola) y `0 = 0` (sin timeouts de cliente) en el régimen mixto
 - [ ] Artefactos de barrido en `load-tests/run-9000/sweep-N6-N7-N8/`
-- [ ] `docs/report.md` actualizado con tabla comparativa `N=4` vs `N_elegido`
-- [ ] Revisión con humano (TASK-33..36 aprobadas una a una)
+- [ ] `docs/report.md` actualizado con tabla comparativa `N=4` mono-instancia vs despliegue multi-réplica
+- [ ] Revisión con humano (TASK-33..37 aprobadas una a una)
