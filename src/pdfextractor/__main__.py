@@ -19,6 +19,7 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         access_log=False,
+        http="httptools",
     )
 
 

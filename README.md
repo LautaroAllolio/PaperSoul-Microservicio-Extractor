@@ -60,12 +60,18 @@ uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --reload --no-ac
 Modo producción (sin reload):
 
 ```bash
-uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --no-access-log
+uv run uvicorn pdfextractor.main:app --host 0.0.0.0 --port 8001 --no-access-log --http httptools
 ```
 
 El servicio emite su propio log JSON estructurado por request; `--no-access-log`
 evita la línea duplicada del access log de uvicorn (la entrada de contenedor
 `python -m pdfextractor` ya lo desactiva).
+
+Se recomienda `--http httptools` (parser HTTP en C/Cython, `httptools` es
+dependencia de uvicorn) en lugar del parser `h11` por defecto escrito en Python
+puro: reduce la CPU dedicada al parsing/framing de los cuerpos multipart y deja
+más ciclos al event loop para el despacho de extracciones bajo carga alta. La
+entrada de contenedor `python -m pdfextractor` ya lo activa.
 
 ## Contrato público
 
