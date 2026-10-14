@@ -689,3 +689,120 @@ la propuesta no se ha aplicado.
 5. **Ejecución de barridos:** ¿los ejecuta el agente (levantan servidor + carga)
    o se preparan los comandos para que los corra el humano? *Recomendado: que
    los ejecute el agente.*
+## 5) Siguiente fase: Elevar tasa de éxito >= 75% bajo saturación (Vegeta A 400 rps)
+
+### TASK-33: Habilitar `httptools` para Uvicorn (parser HTTP C)
+
+**Descripción:** Activar `--http httptools` en el arranque de Uvicorn para reducir la CPU dedicada al parsing/framing HTTP bajo ráfagas de 400 rps. Verificar la disponibilidad de `httptools` en el entorno.
+
+**Tamaño:** S (1–2 archivos)
+
+**Aceptación:**
+- [ ] `src/pdfextractor/__main__.py` pasa `http="httptools"` a `uvicorn.run` (cuando no se sobreescribe explícitamente)
+- [ ] `tests/extractor/load/run.sh` añade `--http httptools` al comando de arranque del servidor de carga
+- [ ] `README.md` (sección "Despliegue" / "Ejecución local") documenta `--http httptools` como recomendado
+- [ ] El servidor arranca correctamente con `python -m pdfextractor`
+
+**Verificación:**
+- [ ] `pytest -q` verde
+- [ ] `mypy -p pdfextractor` verde
+- [ ] `ruff check` + `ruff format --check` verdes
+- [ ] Smoke test: `GET /health` responde `200` con headers `x-request-id`/`x-correlation-id`
+
+**Dependencias:** Ninguna
+
+**Archivos tocados (propuestos):**
+- `src/pdfextractor/__main__.py`
+- `tests/extractor/load/run.sh`
+- `README.md`
+
+**Riesgo:** Mínimo. Si `httptools` no estuviera presente, Uvicorn hace fallback a `h11`.
+
+### TASK-34: Short-circuit temprano para `/health` y `/ready` en `RequestIdMiddleware`
+
+**Descripción:** Endurecer el fast-path de sondas adelantando el chequeo `request.url.path in {"/health","/ready"}` al **inicio absoluto** de `RequestIdMiddleware.__call__`, evitando lecturas de headers innecesarias bajo 400 rps. Se mantiene el comportamiento exacto (eco de IDs, sin log JSON, sin métrica de extracción).
+
+**Tamaño:** XS (1 archivo)
+
+**Aceptación:**
+- [ ] El guard ocurre **antes** de cualquier acceso innecesario a `request.headers`
+- [ ] Se siguen echando `X-Request-Id` y `X-Correlation-Id` en `/health` y `/ready`
+- [ ] **No** se emite log JSON estructurado para estas rutas
+- [ ] **No** se registra métrica de extracción para estas rutas
+- [ ] No cambia semántica de `/health` (`200`, `service: pdfextractor`) ni `/ready` (`200`/`503`)
+
+**Verificación:**
+- [ ] Tests existentes de middlewares/health/ready verdes
+- [ ] `pytest -q` verde
+- [ ] `mypy -p pdfextractor` verde
+- [ ] `ruff check` + `ruff format --check` verdes
+- [ ] Smoke test: `curl -i localhost:9000/health` incluye `x-request-id`
+
+**Dependencias:** Ninguna (complementa TASK-28)
+
+**Archivos tocados (propuestos):**
+- `src/pdfextractor/presentation/api/middlewares.py`
+
+**Riesgo:** Mínimo.
+
+### TASK-35: Barrido controlado de concurrencia `N in {6,7,8}` con Vegeta A
+
+**Descripción:** Ejecutar barrido reproducible con el mismo arnés (`load-tests/run-9000/targets-mixed.txt`, `body5p.bin`, boundary `----pdfextractorVegetaB0UNDARY`). Para cada `N` lanzar **2 repeticiones** de Vegeta A (400 rps, 30s, timeout 35s), reiniciando el servidor entre distintos valores de `N`. Guardar todos los artefactos.
+
+**Tamaño:** M (documentación + artefactos)
+
+**Aceptación:**
+- [ ] Crear `load-tests/run-9000/sweep-N6-N7-N8/` con subcarpetas `N6_r1,N6_r2,N7_r1,N7_r2,N8_r1,N8_r2`
+- [ ] Por corrida: `results-mixed.bin`, `results-mixed.json`, `vegeta-report-mixed.txt`, `server.log`
+- [ ] Generar tabla con: `N`, `rep`, `success%`, `p50(s)`, `p90(s)`, `p95(s)`, `p99(s)`, `max(s)`, `200`, `503`, `client_timeouts(0)`, `throughput_rps(effective)` + **promedio** por `N`
+- [ ] Elegir **menor N con `success% >= 75 %`** (en empate priorizar menor `p99`)
+- [ ] Documentar tabla en `docs/report.md` (§10.4)
+
+**Verificación:**
+- [ ] Mismos targets/body/header en todas las corridas
+- [ ] Servidor reiniciado al cambiar `N`
+- [ ] Artefactos en `load-tests/run-9000/sweep-N6-N7-N8/`
+- [ ] Tabla clara y reproducible en `docs/report.md`
+
+**Dependencias:** Ninguna (ideal con TASK-33; no bloquea)
+
+**Archivos tocados (propuestos):**
+- `docs/report.md`
+
+**Riesgo:** Medio (tiempo de medición)
+
+### TASK-36: Aplicar `N` elegido, validar >=75% y cerrar con gates verdes
+
+**Descripción:** Aplicar `N_elegido` (menor con >=75%), documentar tuning recomendado en `.env.example` y `README.md`, re-validar con Vegeta A y ejecutar verificación integral con todos los gates verdes.
+
+**Tamaño:** S (1–3 archivos)
+
+**Aceptación:**
+- [ ] Registrar `N_elegido` con justificación (success%, p99) en `docs/report.md`
+- [ ] Actualizar `.env.example` con comentario de valor recomendado para 8 vCPU
+- [ ] Actualizar `README.md` (Despliegue/Escalado) explicando trade-off `N` vs throughput/p99/RSS
+- [ ] Re-ejecutar Vegeta A con `N_elegido` (≥1 repetición, preferible 2) y confirmar `success% >= 75 %`
+- [ ] Actualizar `docs/report.md` con comparativa `N=4` vs `N_elegido`
+- [ ] **Gates 100% verdes:** `pytest`, `pytest -m memory`, `ruff check`, `ruff format --check`, `mypy -p pdfextractor`
+
+**Verificación:**
+- [ ] `success% >= 75 %` confirmado con artefacto
+- [ ] Sin `500`, sin `504` nuevos
+- [ ] `p99` razonable (< 8–9s bajo colapso mixto)
+- [ ] Todos los gates verdes
+
+**Dependencias:** TASK-35
+
+**Archivos tocados (propuestos):**
+- `.env.example`
+- `README.md`
+- `docs/report.md`
+
+**Riesgo:** Bajo
+
+### Checkpoint CP-8: Éxito >= 75% bajo saturación
+- [ ] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..36
+- [ ] `success% >= 75 %` confirmado con Vegeta A (`N_elegido`)
+- [ ] Artefactos de barrido en `load-tests/run-9000/sweep-N6-N7-N8/`
+- [ ] `docs/report.md` actualizado con tabla comparativa `N=4` vs `N_elegido`
+- [ ] Revisión con humano (TASK-33..36 aprobadas una a una)
