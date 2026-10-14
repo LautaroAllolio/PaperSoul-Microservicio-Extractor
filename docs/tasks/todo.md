@@ -691,32 +691,35 @@ la propuesta no se ha aplicado.
    los ejecute el agente.*
 ## 5) Siguiente fase: Elevar tasa de éxito >= 75% bajo saturación (Vegeta A 400 rps)
 
-### TASK-33: Habilitar `httptools` para Uvicorn (parser HTTP C)
+### TASK-33: Habilitar `httptools` para Uvicorn (parser HTTP C) ✅
 
 **Descripción:** Activar `--http httptools` en el arranque de Uvicorn para reducir la CPU dedicada al parsing/framing HTTP bajo ráfagas de 400 rps. Verificar la disponibilidad de `httptools` en el entorno.
 
 **Tamaño:** S (1–2 archivos)
 
 **Aceptación:**
-- [ ] `src/pdfextractor/__main__.py` pasa `http="httptools"` a `uvicorn.run` (cuando no se sobreescribe explícitamente)
-- [ ] `tests/extractor/load/run.sh` añade `--http httptools` al comando de arranque del servidor de carga
-- [ ] `README.md` (sección "Despliegue" / "Ejecución local") documenta `--http httptools` como recomendado
-- [ ] El servidor arranca correctamente con `python -m pdfextractor`
+- [x] `src/pdfextractor/__main__.py` pasa `http="httptools"` a `uvicorn.run`
+- [x] `tests/extractor/load/run.sh` añade `--http httptools` al comando de arranque del servidor de carga
+- [x] `README.md` (sección "Ejecución") documenta `--http httptools` como recomendado
+- [x] El servidor arranca correctamente con `python -m pdfextractor`
 
 **Verificación:**
-- [ ] `pytest -q` verde
-- [ ] `mypy -p pdfextractor` verde
-- [ ] `ruff check` + `ruff format --check` verdes
-- [ ] Smoke test: `GET /health` responde `200` con headers `x-request-id`/`x-correlation-id`
+- [x] `pytest -q` verde (175 passed / 2 skipped)
+- [x] `mypy -p pdfextractor` verde (38 source files)
+- [x] `ruff check` + `ruff format --check` verdes
+- [x] Smoke test: `GET /health` responde `200` con header `x-request-id`
+- [x] `pytest -m memory` verde (2 passed)
 
 **Dependencias:** Ninguna
 
-**Archivos tocados (propuestos):**
+**Archivos tocados:**
 - `src/pdfextractor/__main__.py`
 - `tests/extractor/load/run.sh`
 - `README.md`
+- `tests/extractor/test_extractor_settings.py` (assert de `http=="httptools"`)
 
 **Riesgo:** Mínimo. Si `httptools` no estuviera presente, Uvicorn hace fallback a `h11`.
+**Completado:** `httptools 0.8.0` disponible vía `uvicorn[standard]`. Commit `#64`.
 
 ### TASK-34: Short-circuit temprano para `/health` y `/ready` en `RequestIdMiddleware`
 
