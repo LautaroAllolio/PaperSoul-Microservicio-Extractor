@@ -721,32 +721,35 @@ la propuesta no se ha aplicado.
 **Riesgo:** Mínimo. Si `httptools` no estuviera presente, Uvicorn hace fallback a `h11`.
 **Completado:** `httptools 0.8.0` disponible vía `uvicorn[standard]`. Commit `#64`.
 
-### TASK-34: Short-circuit temprano para `/health` y `/ready` en `RequestIdMiddleware`
+### TASK-34: Short-circuit temprano para `/health` y `/ready` en `RequestIdMiddleware` ✅
 
 **Descripción:** Endurecer el fast-path de sondas adelantando el chequeo `request.url.path in {"/health","/ready"}` al **inicio absoluto** de `RequestIdMiddleware.__call__`, evitando lecturas de headers innecesarias bajo 400 rps. Se mantiene el comportamiento exacto (eco de IDs, sin log JSON, sin métrica de extracción).
 
 **Tamaño:** XS (1 archivo)
 
 **Aceptación:**
-- [ ] El guard ocurre **antes** de cualquier acceso innecesario a `request.headers`
-- [ ] Se siguen echando `X-Request-Id` y `X-Correlation-Id` en `/health` y `/ready`
-- [ ] **No** se emite log JSON estructurado para estas rutas
-- [ ] **No** se registra métrica de extracción para estas rutas
-- [ ] No cambia semántica de `/health` (`200`, `service: pdfextractor`) ni `/ready` (`200`/`503`)
+- [x] El guard ocurre **antes** de cualquier acceso innecesario a headers (se salta `time.perf_counter` + `_declared_content_length`)
+- [x] Se siguen echando `X-Request-Id` y `X-Correlation-Id` en `/health` y `/ready`
+- [x] **No** se emite log JSON estructurado para estas rutas
+- [x] **No** se registra métrica de extracción para estas rutas
+- [x] No cambia semántica de `/health` (`200`, `service: pdfextractor`) ni `/ready` (`200`/`503`)
 
 **Verificación:**
-- [ ] Tests existentes de middlewares/health/ready verdes
-- [ ] `pytest -q` verde
-- [ ] `mypy -p pdfextractor` verde
-- [ ] `ruff check` + `ruff format --check` verdes
-- [ ] Smoke test: `curl -i localhost:9000/health` incluye `x-request-id`
+- [x] Tests existentes de middlewares/health/ready verdes (12 passed)
+- [x] `pytest -q` verde (176 passed / 2 skipped)
+- [x] `mypy -p pdfextractor` verde (38 source files)
+- [x] `ruff check` + `ruff format --check` verdes
+- [x] Smoke test: `curl -i localhost:9000/health` incluye `x-request-id`; sin `"path": "/health"` en el log JSON
+- [x] `pytest -m memory` verde (2 passed)
 
 **Dependencias:** Ninguna (complementa TASK-28)
 
-**Archivos tocados (propuestos):**
-- `src/pdfextractor/presentation/api/middlewares.py`
+**Archivos tocados:**
+- `src/pdfextractor/infrastructure/middleware/middlewares.py`
+- `tests/extractor/integration/test_middlewares.py` (test de short-circuit: escaneo de `Content-Length` solo en rutas no-sonda)
 
 **Riesgo:** Mínimo.
+**Completado:** nuevo helper `_serve_probe` (eco único) con guard al inicio de `__call__`. Commit `#66`.
 
 ### TASK-35: Barrido controlado de concurrencia `N in {6,7,8}` con Vegeta A
 
