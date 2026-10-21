@@ -648,6 +648,28 @@ La **rodilla está en ~250–270 rps** por instancia: hasta 250 rps el servicio 
 - `k = ceil(400 / 200) = 2` → ~99 % por instancia (margen: `≤250` rps aún da ~93 %).
 - Se recomienda **`k = 3`** por HA y holgura (≈133 rps/instancia), para tolerar la caída de una réplica o un reparto desigual.
 
+**Fórmula de réplicas.** `k = ceil(demanda_agregada_rps / 200)`, donde **200 rps por instancia**
+es el presupuesto seguro (≈99 % de éxito, § 10.5 curva de capacidad). Para la demanda de
+Vegeta A (400 rps): `k = ceil(400 / 200) = 2` es el **mínimo** que cumple la meta y `k = 3` el
+recomendado. Subir `N` (pool) **no** sustituye a `k`: el cuello es el *event loop* por instancia,
+no la extracción (§ 10.4).
+
+**Comparativa mono-instancia vs. presupuesto multi-réplica** (mismo arnés mixto, 400 rps
+agregados, `QUEUE_TIMEOUT_SECONDS=2`, timeout de cliente 35 s):
+
+| Despliegue | RPS por instancia | Éxito (%) | p99 (s) | `0` (cliente) | Fuente |
+|---|---:|---:|---:|---:|---|
+| 1 instancia, `N=4` (config de referencia) | 400 | **39.26** | 35.003 | 2975 (24.79 %) | § 3.3 (2026-10-11) |
+| 1 instancia, `N=7` (mejor `N` del barrido) | 400 | **50.72** | 35.002 | 21–43 % | § 10.4 |
+| `k = 2` réplicas (`N` por réplica sin tocar) | 200 | **82.77 / 79.71 / 74.62 / 74.15** (media **77.81**) | ~2.1 | **0** | validación multi-réplica |
+| `k = 3` réplicas (**recomendado**) | 133 | **78.13** | 2.21 | **0** | validación multi-réplica |
+
+La lectura es directa: la mono-instancia **no** alcanza la meta en ningún `N` (39–51 %, con el
+`p90/p95/p99` clavado en el timeout de cliente y miles de `0`), mientras que repartir la misma
+demanda entre `k` réplicas la cumple holgadamente (**~78 % de media con `k=2`**, 78.13 % con
+`k=3`) y, sobre todo, cambia la **forma** del fallo: `p99 ≈ 2 s` (el timeout de cola, backpressure
+limpia) y **cero timeouts de cliente**.
+
 **Validación multi-réplica** (réplicas co-ubicadas en este mismo host de 8 núcleos / 3.8 GB —cota inferior, penalizada por compartir CPU—):
 
 | Configuración | Éxito (%) | p99 (s) | 0 (cliente) |
@@ -655,7 +677,7 @@ La **rodilla está en ~250–270 rps** por instancia: hasta 250 rps el servicio 
 | 2 réplicas × 200 rps (400 total) — 4 corridas | 82.77 / 79.71 / 74.62 / 74.15 | ~2.1 | 0 |
 | 3 réplicas × 133 rps (399 total) | 78.13 | 2.21 | 0 |
 
-**Veredicto:** repartir la demanda entre ≥2 réplicas sitúa el agregado en **~75–83 %** (cota inferior con todas las réplicas en un host; en contenedores separados cada una sigue su curva de instancia, ~99 % a 200 rps), **con backpressure limpia** (`p99 ≈ 2 s`, el timeout de cola) y **cero timeouts de cliente** —frente al colapso a 35 s de una sola instancia—. El hardening opcional (TASK-37) acota la concurrencia del event loop para que una instancia aislada degradada falle rápido con `503` en lugar de colapsar.
+**Veredicto:** repartir la demanda entre ≥2 réplicas sitúa el agregado en **~75–83 %** (cota inferior con todas las réplicas en un host; en contenedores separados cada una sigue su curva de instancia, ~99 % a 200 rps), **con backpressure limpia** (`p99 ≈ 2 s`, el timeout de cola) y **cero timeouts de cliente** —frente al colapso a 35 s de una sola instancia—. El dimensionamiento queda cerrado como `k = ceil(demanda_agregada / 200)` con `k = 3` recomendado (HA + holgura), y el tuning por instancia (`N = 7`) documentado en `.env.example`/`README.md`. El hardening opcional (TASK-37) acota la concurrencia del event loop para que una instancia aislada degradada falle rápido con `503` en lugar de colapsar.
 
 ## 8. Referencias
 

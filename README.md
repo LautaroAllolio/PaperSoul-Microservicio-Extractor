@@ -40,7 +40,7 @@ Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 | `PDFEXTRACTOR_MAX_UPLOAD_BYTES` | `52428800` | Límite del `file` (50 MB) |
 | `PDFEXTRACTOR_MIN_TEXT_LENGTH` | `10` | Mínimo de caracteres extraídos para considerar éxito |
 | `PDFEXTRACTOR_WORKERS` | *(uno por CPU)* | Workers del process pool |
-| `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS` | *(= workers)* | Tope de extracciones concurrentes (pool + cola) |
+| `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS` | *(= workers)* | Tope de extracciones concurrentes (pool + cola). `7` es el tuning de referencia **medido** para una instancia (≤200 rps); con réplicas co-ubicadas en un host usar `2` (ver *Escalado*) |
 | `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` | `5.0` | Espera máxima en cola antes de `503` |
 | `PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS` | `30.0` | Tope por extracción antes de `504` |
 | `PDFEXTRACTOR_MAX_PAGES` | `1000` | Tope de páginas (anti decompression-bomb) → `422` |
@@ -155,3 +155,59 @@ docker build -t pdfextractor:ci .    # build de la imagen
 - **Health checks:** `/health` para liveness, `/ready` para readiness (refleja overload).
 - **Escalado:** el límite de memoria lo fija `PDFEXTRACTOR_MAX_UPLOAD_BYTES` × `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`, ambos configurables.
 - **Oversubscription de `uvicorn --workers N`:** cada worker de uvicorn es un proceso independiente y crea **su propio** process pool de `PDFEXTRACTOR_WORKERS` workers (por defecto, uno por CPU). Con `--workers N` el total de procesos de extracción es `N × workers_del_pool` — un footgun de memoria/rendimiento si ambos se sobredimensionan. Configuración recomendada: un solo worker uvicorn con `PDFEXTRACTOR_WORKERS` = CPUs, **o** varios workers uvicorn (`N`) con `PDFEXTRACTOR_WORKERS = 1` y escalado horizontal por réplicas de contenedor (el tope de concurrencia por proceso lo sigue fijando `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`). No hay código que compense esto: queda explícito en la configuración del operador.
+
+### Escalado horizontal (múltiples réplicas)
+
+El cuello de una instancia **no es la extracción** sino su *event loop* monohilo (framing HTTP +
+parser multipart): medido con el arnés mixto a 400 rps, subir `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`
+de 4 a 8 solo mueve el éxito de **39 % a ~46–51 %** (el `p90/p95/p99` queda clavado en el timeout de
+cliente). El servicio sí es estable hasta su rodilla: **≤200 rps por instancia ≈ 99 % de éxito**
+(250 rps → ~93 %; a 300 rps colapsa). Ver [`docs/report.md`](docs/report.md) §10.4–§10.5.
+
+Por eso el escalado es **horizontal**: varias réplicas del contenedor detrás de un balanceador, no
+`uvicorn --workers`. El extractor es **stateless** (cero disco, sin sesión), así que el balanceo es
+round-robin y **no** necesita sticky sessions.
+
+```
+demanda_agregada (rps)  ──Traefik (round-robin)──▶  réplica 1 ─┐
+                                                     réplica 2 ─┼─ cada una ≤200 rps
+                                                     réplica k ─┘
+```
+
+**Fórmula de dimensionamiento:** `k = ceil(demanda_agregada_rps / 200)`.
+
+| Demanda agregada | Réplicas (`k`) | RPS por réplica | Nota |
+|---|---:|---:|---|
+| 200 rps | 1 | 200 | una instancia basta (≈99 %) |
+| 400 rps | 2 (mínimo) / **3 (recomendado)** | 200 / 133 | `k=3` tolera la caída de una réplica |
+| 600 rps | 3 (mínimo) / 4 | 200 / 150 | `k=3` ya está a ~99 % por réplica; `k=4` da margen |
+
+Medición de referencia (400 rps agregados, arnés mixto, réplicas co-ubicadas en un mismo host =
+cota inferior): mono-instancia **39–51 %** de éxito con `p99 = 35 s` y miles de timeouts de
+cliente; `k=2` **~78 %** (media de 4 corridas) y `k=3` **78.13 %**, ambas con `p99 ≈ 2 s` y
+**cero** timeouts de cliente.
+
+**Trade-off de las palancas de tuning:**
+
+| Palanca | Efecto | Costo |
+|---|---|---|
+| `MAX_CONCURRENT_EXTRACTIONS` (`N`) ↑ | no sube el éxito bajo saturación (≤51 % a 400 rps); solo acorta la cola de extracción | +RSS por réplica (≈62 MiB por worker tibio) y CPU |
+| réplicas `k` ↑ | **sí** sube el éxito agregado (39 % → ~78 %) y **corta el `p99` a ~2 s** | +RSS total (≈486 MiB por instancia) y +núcleos; una réplica menos = `demanda/k` menos de capacidad |
+| pool pequeño por réplica (`WORKERS=2`, `MAX_CONCURRENT_EXTRACTIONS=2`) | deja CPUs libres para los event loops co-ubicados | menor throughput por réplica |
+
+> Cuando las réplicas comparten host (`docker compose` con varias réplicas en la misma máquina),
+> conviene un **pool pequeño por réplica** (`PDFEXTRACTOR_WORKERS=2`,
+> `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=2`) y repartir las réplicas en hosts/núcleos
+> distintos; con núcleos dedicados por réplica, `N=7` (el valor de `.env.example`) es el
+> tuning de referencia.
+
+### Integración con Traefik
+
+- **Router**: un solo router por servicio, compartido por todas las réplicas (por eso el despliegue **no** fija `container_name` ni publica `ports:`; las réplicas se descubren por el Docker provider de Traefik en la red externa `mired`).
+- **Balanceo**: round-robin, **sin sticky sessions** (el servicio es stateless). Regla de host típica: `Host(\`extractor.universidad.localhost\`)`; el servicio se expone en el puerto interno `9000`.
+- **Healthcheck del balanceador**: `GET /health` (liveness; aislado del downstream), con `interval=10s` y `timeout=3s`.
+- **Readiness**: `GET /ready` devuelve `200`/`503` según el estado de la instancia; un `503` debe sacar la réplica del balanceo (no solo del healthcheck).
+- **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`. Ojo: Traefik v3.5 **no** reintenta respuestas `5xx` ni `POST` con cuerpo (`retryNonIdempotentMethod`), así que el retry **no** es garantía de reejecución en otra réplica.
+- **Red**: `mired` es **externa** (`external: true`); no la crea ni la destruye el despliegue del extractor.
+
+Guía de validación extremo a extremo con el Orquestador: [`docs/integration.md`](docs/integration.md).

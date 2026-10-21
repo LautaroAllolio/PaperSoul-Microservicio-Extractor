@@ -75,7 +75,7 @@ def test_the_example_env_file_loads_without_error(tmp_path: Path) -> None:
     settings = Settings(_env_file=target)
 
     assert settings.workers is None
-    assert settings.max_concurrent_extractions is None
+    assert settings.max_concurrent_extractions == 7
     assert settings.port == 9000
 
 
