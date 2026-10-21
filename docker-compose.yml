@@ -1,0 +1,101 @@
+# Compose del Extractor. Define ÚNICAMENTE los recursos propios del Extractor:
+# no incluye Traefik (que descubre las réplicas por su Docker provider) ni los
+# demás servicios de PaperSoul, que se despliegan por separado y se alcanzan a
+# través de la red externa `mired`.
+#
+# No publica el puerto 9000 al host (lo expone Traefik dentro de `mired`) y no
+# fija `container_name`, así que se pueden levantar varias réplicas.
+#
+# Los labels replican el patrón del Compose del Orquestador: un único router y
+# un único servicio (compartidos por todas las réplicas) con balanceo y
+# healthcheck. `entrypoints` y `tls` son sustituibles por entorno para que el
+# barrido pueda usar un Traefik desechable por HTTP sin editar este archivo.
+name: papersoul-extractor
+
+services:
+  extractor:
+    build: .
+    image: ${EXTRACTOR_IMAGE:-pdfextractor:local}
+    restart: unless-stopped
+    environment:
+      # Escucha en todas las interfaces del contenedor: Traefik llega por la red
+      # `mired` (no se publica nada al host).
+      PDFEXTRACTOR_HOST: ${PDFEXTRACTOR_HOST:-0.0.0.0}
+      PDFEXTRACTOR_PORT: ${PDFEXTRACTOR_PORT:-9000}
+      # 0: el orquestador acepta texto vacío (PDF escaneado).
+      PDFEXTRACTOR_MIN_TEXT_LENGTH: ${PDFEXTRACTOR_MIN_TEXT_LENGTH:-0}
+      # Pool pequeño por réplica: las réplicas comparten host, y lo que hay que
+      # proteger es el event loop de cada una (no el pool). Ver README §Escalado.
+      PDFEXTRACTOR_WORKERS: ${EXTRACTOR_WORKERS:-2}
+      PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS: ${EXTRACTOR_MAX_CONCURRENT:-2}
+      # Puerta del event loop (TASK-37): peticiones admitidas a la vez. Por
+      # defecto acompaña a MAX_CONCURRENT_EXTRACTIONS; el exceso se rechaza con
+      # 503 {"error":"overloaded"} sin leer el cuerpo.
+      PDFEXTRACTOR_MAX_INFLIGHT_REQUESTS: ${EXTRACTOR_MAX_INFLIGHT:-${EXTRACTOR_MAX_CONCURRENT:-2}}
+      PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS: ${PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS:-5.0}
+      PDFEXTRACTOR_WARMUP: ${PDFEXTRACTOR_WARMUP:-true}
+      PDFEXTRACTOR_METRICS_ENABLED: ${PDFEXTRACTOR_METRICS_ENABLED:-true}
+      PDFEXTRACTOR_LOG_LEVEL: ${PDFEXTRACTOR_LOG_LEVEL:-INFO}
+    # Margen para que terminen las extracciones en vuelo (el timeout de
+    # extracción es 30 s) antes de que el contenedor muera.
+    stop_grace_period: ${EXTRACTOR_STOP_GRACE_PERIOD:-35s}
+    deploy:
+      replicas: ${EXTRACTOR_REPLICAS:-3}
+    networks:
+      - mired
+    # Descubrimiento de las réplicas por el Docker provider de Traefik. Labels
+    # del servicio (compartidos por todas las réplicas): un único router y un
+    # único servicio con balanceo y healthcheck, por eso NO fijamos
+    # container_name. La instancia Traefik usa exposedByDefault=false: sin
+    # traefik.enable=true el contenedor quedaría invisible para el proxy.
+    labels:
+      - "traefik.enable=true"
+      # IP a usar dentro de la red compartida (Traefik vive en `mired`).
+      - "traefik.docker.network=mired"
+      # El router va por https en el despliegue real; el barrido usa un Traefik
+      # desechable con entrypoint http (EXTRACTOR_ENTRYPOINT=http).
+      - "traefik.http.routers.extractor.entrypoints=${EXTRACTOR_ENTRYPOINT:-https}"
+      # Host cubierto por el certificado estático (wildcard *.universidad.localhost).
+      # Solo Host: el extractor sirve varios paths (/api/v1/extractions, /health,
+      # /ready, /metrics) y no debe acotar el router a uno.
+      - "traefik.http.routers.extractor.rule=Host(`extractor.universidad.localhost`)"
+      # Sin certresolver (el Traefik existente usa cert.pem/key.pem estáticos): solo
+      # se marca TLS para que el entrypoint https sirva el certificado del default
+      # TLS store.
+      - "traefik.http.routers.extractor.tls=${EXTRACTOR_TLS:-true}"
+      - "traefik.http.routers.extractor.middlewares=extractor-retry"
+      # Las réplicas comparten este nombre de servicio: Traefik las agrupa y balancea.
+      - "traefik.http.services.extractor.loadbalancer.server.port=9000"
+      # Health check del balanceador = liveness GET /health (aislado del downstream).
+      - "traefik.http.services.extractor.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.extractor.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.extractor.loadbalancer.healthcheck.timeout=3s"
+      # Retry limitado a lo que ofrece Traefik v3.5: reintenta solo cuando el backend
+      # no responde (error de conexión/sin respuesta). v3.5 NO reintenta respuestas
+      # 5xx (status) ni POST con cuerpo (retryNonIdempotentMethod); por eso esto NO
+      # es una garantía de reejecución en otra instancia.
+      - "traefik.http.middlewares.extractor-retry.retry.attempts=2"
+      - "traefik.http.middlewares.extractor-retry.retry.initialinterval=500ms"
+    # Healthcheck de Docker, además del que hace Traefik sobre /health. El
+    # `start_period` cubre el calentamiento del pool de extracción: hasta ~8 s
+    # con el host saturado, el contenedor no responde y quedaría en "starting".
+    # El Docker provider de Traefik no enruta a un contenedor que no esté
+    # "healthy", así que un rolling deploy no genera 502 por réplicas calientes.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Sin `ports:` (no se publica al host) y sin `container_name` (permite escalar).
+
+networks:
+  # Red del stack de Traefik: administrada fuera de este Compose. No se crea ni
+  # se elimina aquí; debe existir antes de `docker compose up`.
+  mired:
+    external: true
+    name: ${TRAEFIK_NETWORK:-mired}
