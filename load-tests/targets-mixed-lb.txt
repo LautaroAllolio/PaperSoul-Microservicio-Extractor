@@ -1,0 +1,37 @@
+# Targets del barrido multi-réplica (TASK-39).
+#
+# Misma mezcla que `load-tests/run-9000/targets-mixed.txt` (50 % POST / 50 %
+# sondas) pero apuntando al Traefik desechable en lugar de a una instancia, y
+# con la cabecera `Host` que exige el router (`Host(`extractor.universidad.localhost`)`).
+#
+# Vegeta ignora la cabecera `Host` si se pasa por `-header` (el cliente HTTP de
+# Go usa el host de la URL), así que va aquí, línea a línea, en el formato de
+# targets HTTP de Vegeta:
+#
+#     <METHOD> <URL>
+#     <Header>: <valor>
+#
+# El cuerpo multipart lo aporta el flag global `-body` y el `Content-Type`
+# global `-header` (boundary del body), igual que en el resto del arnés.
+#
+# El script `load-tests/sweep-replicas.sh` regenera una copia de este fichero
+# en `load-tests/run-9000/targets-mixed-lb.txt` con el puerto y el host que
+# use en cada corrida (esta copia es la que consume Vegeta).
+
+GET http://127.0.0.1:18080/health
+Host: extractor.universidad.localhost
+
+GET http://127.0.0.1:18080/ready
+Host: extractor.universidad.localhost
+
+GET http://127.0.0.1:18080/metrics
+Host: extractor.universidad.localhost
+
+POST http://127.0.0.1:18080/api/v1/extractions
+Host: extractor.universidad.localhost
+
+POST http://127.0.0.1:18080/api/v1/extractions
+Host: extractor.universidad.localhost
+
+POST http://127.0.0.1:18080/api/v1/extractions
+Host: extractor.universidad.localhost

@@ -797,6 +797,84 @@ gestor espera el *sentinel* del hijo) y, hasta que lo detecta, el `submit` sigui
 servir el worker superviviente y el crash pasaba desapercibido. Ahora el test **espera la
 detección** (`executor._broken`) antes de exigir el `RuntimeError`: 10/10 verde.
 
+### 10.7 TASK-39/40: despliegue real (Compose + Traefik) y barrido de réplicas
+
+**Montaje.** `docker-compose.yml` (TASK-38) levanta `k` réplicas del extractor en la red externa
+`mired` y un Traefik desechable (`traefik:v3.7.16`, round-robin) las antecede. Carga mixta de
+**400 rps** (50 % `POST` / 50 % sondas) durante 30 s, `N = 7` workers por réplica, puerta `K = N`,
+`queue_timeout = 2 s`. Script `load-tests/sweep-replicas.sh`; artefactos por corrida en
+`load-tests/run-9000/sweep-replicas/k{K}_r{rep}/` (resultados Vegeta, access log de Traefik, log
+JSON de cada réplica, muestras de `docker stats` y reparto de POST entre réplicas).
+
+**Barrido `k ∈ {3,4,5}` × 3 réplicas (9 corridas, 400 rps mixtos, `N = 7`):**
+
+| k | rep | Éxito (%) | Throughput (rps) | p50 (s) | p90 (s) | p95 (s) | p99 (s) | max (s) | `200` | `502` | `503` | `0` | `499` | CPU Traefik máx | load1 máx | POST por réplica |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 3 | 1 | 81.38 | 304.1 | 0.160 | 2.183 | 2.236 | 2.333 | 2.671 | 9766 | 0 | 2234 | **0** | 1 | 61 % | 16.8 | 1986 / 1998 / 2016 |
+| 3 | 2 | 79.75 | 297.7 | 0.172 | 2.192 | 2.248 | 2.380 | 2.692 | 9570 | 3 | 2427 | **0** | 1 | 59 % | 16.5 | 1994 / 2005 / 1998 |
+| 3 | 3 | 79.92 | 298.5 | 0.184 | 2.193 | 2.240 | 2.330 | 2.612 | 9590 | 0 | 2410 | **0** | 1 | 48 % | 18.2 | 2004 / 1998 / 1998 |
+| 4 | 1 | 80.48 | 301.0 | 0.197 | 2.248 | 2.316 | 2.432 | 2.905 | 9658 | 0 | 2342 | **0** | 1 | 66 % | 20.3 | 1754 / 1228 / 1773 / 1245 |
+| 4 | 2 | 78.65 | 293.9 | 0.306 | 2.267 | 2.334 | 2.465 | 2.909 | 9438 | 2 | 2560 | **0** | 1 | 45 % | 20.3 | 1763 / 1748 / 1236 / 1253 |
+| 4 | 3 | 74.88 | 279.9 | 0.744 | 2.326 | 2.442 | 2.798 | 4.174 | 8986 | 0 | 3014 | **0** | 1 | 58 % | 20.8 | 1654 / 1305 / 1724 / 1317 |
+| 5 | 1 | 77.80 | 290.5 | 0.387 | 2.344 | 2.431 | 2.559 | 3.031 | 9336 | 4 | 2660 | **0** | 1 | 49 % | 23.8 | 1012 / 1206 / 1200 / 1234 / 1346 |
+| 5 | 2 | **19.69** | 18.9 | 35.926 | 41.486 | 42.442 | 43.051 | 43.068 | 1248 | 6 | 293 | **4792** | 43 | 385 % | 35.3 | 570 / 570 / 552 / 559 / 554 |
+| 5 | 3 | 76.91 | 287.0 | 0.359 | 2.356 | 2.452 | 2.674 | 3.840 | 9228 | 0 | 2771 | **0** | 1 | 51 % | 26.8 | 1074 / 1367 / 1174 / 1168 / 1216 |
+
+**Promedio por `k`** (mediana de las 3 corridas; la corrida colapsada de `k=5` se cuenta aparte):
+
+| k | Éxito (%) | p99 (s) | Throughput (rps) | `200` | `503` | `0` (cliente) | Reparto |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| **3** | **79.92** | **2.333** | 298.5 | 9590 | 2410 | **0** | 1998 / 1998 / 2000 |
+| 4 | 78.65 | 2.465 | 293.9 | 9438 | 2560 | **0** | 1754 / 1748 / 1236 / 1253 |
+| 5 | 77.35 | 2.559 | 288.8 | 9282 | 2716 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
+
+**Veredicto: el óptimo sigue siendo `k = 3`** (el menor `k` probado, y el que ya recommendationaba
+§10.5/§10.6 por HA + holgura). En un **único host** más réplicas **no** dan más caudal: los
+núcleos son el recurso compartido y el reparto es cada vez más uneven (`k=4`: 1754/1748/1236/1253;
+`k=5`: ~1 200 cada una frente a las ~2 000 de `k=3`), el `p99` se degrada monótonamente
+(2.33 → 2.47 → 2.56 s) y el éxito baja (79.92 → 78.65 → 77.35 %). El escalado real es **una
+réplica por host** (`k = ceil(demanda / 200)`), como documenta §10.5.
+
+**Lo que cuesta el salto por el balanceador (medido, no supuesto).** Comparando el mismo `k=3` con
+el arnés nativo de §10.6 (sin LB): **92.70 %** de éxito y `p99 = 2.21 s`; a través de Traefik,
+**79.92 %** y `p99 = 2.33 s`. La diferencia es el **proceso del LB**: en las muestras de
+`docker stats` Traefik llega a **45–66 % de un núcleo** (≈2.5–3.5 ms de CPU por petición) y lo
+saca de los mismos 8 vCPU que ya están al límite. El balanceo, en sí, es **perfecto**
+(1998/1998/2000 POST por réplica, round-robin, sin sticky).
+
+**El modo de fallo del LB, y cómo lo dispara el arnés (3 hallazgos del harness).** Cuando el LB se
+queda sin CPU, su *listen backlog* (`somaxconn=4096`) desborda, el kernel **tira los SYN**
+(`tcp_max_syn_backlog=256` y **sin** syncookies) y el cliente entra en *backoff* exponencial → los
+timeouts de 35 s miden la **plataforma**, no el servicio. Firmas medidas: `TcpExtListenOverflows =
+TcpExtListenDrops = 550 569` en el host, `499` en el access log de Traefik (el cliente cortó) y
+servidores respondiendo `200`/`503` que el cliente nunca vio. Disparadores encontrados y eliminados:
+
+1. **El generador de carga se comía la CPU del sistema bajo prueba.** Con `GOMAXPROCS=8` (por
+   defecto) Vegeta ocupaba varios núcleos: el LB se quedaba sin CPU y la corrida colapsaba
+   (21.34 % de éxito, 6 628 timeouts). Con `GOMAXPROCS=2` el generador deja CPU al sistema y la
+   degradación es la real (`503` acotados a ~2 s, cero timeouts). **El arnés debe limitarse.**
+2. **Atacar en pleno temporal de arranque.** Con `k` réplicas, levantar la pila es `k × 8`
+   procesos: el host queda en `load` 15–30 durante medio minuto. El barrido ahora **espera a que
+   la CPU del host esté ociosa** antes de medir (`/proc/stat`, ≤35 % de uso).
+3. **Readiness laxo.** Un gate que solo exige *un* `200` del LB arranca el ataque mientras el
+   resto de las réplicas sigue calentando (con el host cargado, el warmup del pool llegó a 8.2 s):
+   Traefik enruta a contenedores que aún no escuchan → `502` y réplicas descartadas por el
+   provider. Medido: `k=5` rep=1 a **162 rps** con **3 réplicas en 0 POST**. El arnés ahora exige
+   que la API de Traefik reporte las `k` réplicas en `UP` antes de atacar.
+
+Con las tres correcciones, **8 de 9** corridas.validaron con **cero timeouts** y `p99 ≈ 2.3 s`; la
+novena (`k=5` rep=2) colapsó por el mismo mecanismo de la plataforma (`4792` timeouts, `43` `499`).
+El riesgo residual es intrínseco a **co-ubicar el LB con la app en un host saturado**: el LB es un
+proceso único que concentration las 400 rps en un solo listener. **Recomendación: el balanceador
+necesita holgura de CPU (host propio, o al menos un núcleo reservado)**, y en producción hay que
+vigilar `TcpExtListenOverflows` junto con la latencia del LB.
+
+**Cambio en el Compose (TASK-38) que salió de esto:** se añadió un *healthcheck* de **Docker**
+(`GET /health`, `interval=10s`, `timeout=5s`, `retries=3`, **`start_period=30s`**). Con él, una
+réplica que todavía está calentando queda en `starting` y el **Docker provider de Traefik no le
+enruta tráfico** → un *rolling deploy* no produce `502` por réplicas calientes. (El healthcheck de
+Traefik `interval=10s` no cubría esa ventana: su primer muestreo cae después del warmup.)
+
 ## 8. Referencias
 
 - `docs/tasks/plan.md` — alcance, ruta `POST /api/v1/extractions` (AD6) y

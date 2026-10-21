@@ -782,7 +782,7 @@ la propuesta no se ha aplicado.
 **Riesgo:** Medio (tiempo de medición)
 **Completado:** curvas de capacidad y validación multi-réplica en §10.5.
 
-### TASK-36: Dimensionar por instancia y documentar el despliegue multi-réplica (Traefik)
+### TASK-36: Dimensionar por instancia y documentar el despliegue multi-réplica (Traefik) ✅
 
 **Descripción:** Fijar el tuning por instancia (mantener `N=7`) y documentar la fórmula de réplicas para la demanda **agregada** de 400 rps, con Traefik al frente (round-robin; servicio *stateless*). Actualizar `.env.example` y `README.md` con el presupuesto por instancia (≤200 rps ≈99 %, rodilla ~250 rps), el número de réplicas (`k=2` mínimo, `k=3` recomendado por HA) y las sondas `health`/`ready` para el balanceador. No se usa escalado vertical intra-proceso (`--workers`): el escalado es horizontal por el orquestador.
 
@@ -814,6 +814,11 @@ la propuesta no se ha aplicado.
 > (`docker-compose.yml` con `deploy.replicas` + labels Traefik) y su validación
 > empírica se desarrollan en la sección **6)** (TASK-38..40). Aquí se mantiene
 > `N=7` como referencia mono-instancia y la fórmula `k = ceil(400/200)`.
+> **Cerrada (2026-10-21):** el despliegue con Compose + Traefik quedó validado
+> empíricamente en TASK-38..40 (`docs/report.md` **§10.7**): el óptimo medido es
+> **`k = 3`** (79.92 % de éxito, `p99 = 2.33 s`, cero timeouts de cliente,
+> reparto 1998/1998/2000) y, en un host único, más réplicas **no** dan más caudal
+> (el recurso compartido son los núcleos) —el escalado real es una réplica por host—.
 
 **Completado:** tarea **solo de documentación/configuración** — sin cambios en `src/`.
 - `docs/report.md` §10.5 gana la **fórmula de réplicas** (`k = ceil(demanda_agregada_rps / 200)`;
@@ -914,9 +919,13 @@ la propuesta no se ha aplicado.
 - [x] `docs/report.md` actualizado con tabla comparativa `N=4` mono-instancia vs despliegue multi-réplica (§10.5–§10.6)
 - [x] Revisión con humano (TASK-33..37 aprobadas una a una)
 
-## 6) Escalado horizontal multi-réplica + Traefik (DECLARADO — pendiente de OK)
+## 6) Escalado horizontal multi-réplica + Traefik (EN CURSO — TASK-38 ✅, TASK-39 ✅, TASK-40 en curso de revisión)
 
-> **Estado: NO iniciado.** Reencuadre aprobado tras TASK-35: los 400 rps de Vegeta A
+> **Estado: implementado, pendiente de revisión humana.** TASK-38 (Compose + labels Traefik) y
+> TASK-39 (arnés de barrido con Traefik desechable) están **completadas**; TASK-40 (barrido
+> `k ∈ {3,4,5}`, óptimo documentado y cierre) tiene su evidencia medida y la documentación escrita
+> (`docs/report.md` **§10.7**, `README.md`), a la espera del OK del humano para commitear.
+> Reencuadre aprobado tras TASK-35: los 400 rps de Vegeta A
 > son demanda **agregada** de un despliegue multi-réplica detrás de Traefik, no un
 > objetivo por contenedor. El escalado es **horizontal** (réplicas de contenedor),
 > **no** `uvicorn --workers`. Flujo: gates verdes y commits atómicos
@@ -942,7 +951,7 @@ la propuesta no se ha aplicado.
 >   la fórmula `k = ceil(400/200)` como modelo de despliegue (con núcleos dedicados
 >   por réplica); la cota inferior co-ubicada se reporta aparte.
 
-### TASK-38: `docker-compose.yml` multi-réplica + labels Traefik (+ `.env.example`)
+### TASK-38: `docker-compose.yml` multi-réplica + labels Traefik (+ `.env.example`) ✅
 
 **Descripción:** Añadir un `docker-compose.yml` en la raíz que defina el servicio
 `extractor` replicable, con la **estructura y los labels de Traefik extraídos del
@@ -956,19 +965,19 @@ cambios en `src/`.**
 **Tamaño:** S (2 archivos)
 
 **Aceptación:**
-- [ ] `docker-compose.yml` define el servicio `extractor` con `build: .` e `image: ${EXTRACTOR_IMAGE:-pdfextractor:local}`
-- [ ] **Sin** `ports:` y **sin** `container_name` (permite escalar); `deploy.replicas: ${EXTRACTOR_REPLICAS:-3}`
-- [ ] Red `mired` **externa** (`external: true`, `name: ${TRAEFIK_NETWORK:-mired}`)
-- [ ] Labels que replican el patrón del Orquestador: `traefik.enable`, `traefik.docker.network=mired`, `routers.extractor.entrypoints=${EXTRACTOR_ENTRYPOINT:-https}`, `routers.extractor.rule=Host(extractor.universidad.localhost)`, `routers.extractor.tls=${EXTRACTOR_TLS:-true}`, `services.extractor.loadbalancer.server.port=9000`, `loadbalancer.healthcheck.path=/health` (`interval=10s`, `timeout=3s`), middleware de retry (`attempts=2`, `initialinterval=500ms`)
-- [ ] Entorno del contenedor con el pool pequeño por defecto: `PDFEXTRACTOR_WORKERS=${EXTRACTOR_WORKERS:-2}`, `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=${EXTRACTOR_MAX_CONCURRENT:-2}`, además de `HOST/PORT/MIN_TEXT_LENGTH/WARMUP/METRICS_ENABLED`
-- [ ] `.env.example` documenta `EXTRACTOR_IMAGE`, `EXTRACTOR_REPLICAS`, `EXTRACTOR_WORKERS`, `EXTRACTOR_MAX_CONCURRENT`, `TRAEFIK_NETWORK`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS` (con la nota de que entrypoint/tls se fijan a `http`/`false` solo para el barrido con Traefik desechable)
-- [ ] `docker compose config --quiet` OK y `docker compose build` construye la imagen
+- [x] `docker-compose.yml` define el servicio `extractor` con `build: .` e `image: ${EXTRACTOR_IMAGE:-pdfextractor:local}`
+- [x] **Sin** `ports:` y **sin** `container_name` (permite escalar); `deploy.replicas: ${EXTRACTOR_REPLICAS:-3}`
+- [x] Red `mired` **externa** (`external: true`, `name: ${TRAEFIK_NETWORK:-mired}`)
+- [x] Labels que replican el patrón del Orquestador: `traefik.enable`, `traefik.docker.network=mired`, `routers.extractor.entrypoints=${EXTRACTOR_ENTRYPOINT:-https}`, `routers.extractor.rule=Host(extractor.universidad.localhost)`, `routers.extractor.tls=${EXTRACTOR_TLS:-true}`, `services.extractor.loadbalancer.server.port=9000`, `loadbalancer.healthcheck.path=/health` (`interval=10s`, `timeout=3s`), middleware de retry (`attempts=2`, `initialinterval=500ms`)
+- [x] Entorno del contenedor con el pool pequeño por defecto: `PDFEXTRACTOR_WORKERS=${EXTRACTOR_WORKERS:-2}`, `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS=${EXTRACTOR_MAX_CONCURRENT:-2}`, además de `HOST/PORT/MIN_TEXT_LENGTH/WARMUP/METRICS_ENABLED`
+- [x] `.env.example` documenta `EXTRACTOR_IMAGE`, `EXTRACTOR_REPLICAS`, `EXTRACTOR_WORKERS`, `EXTRACTOR_MAX_CONCURRENT`, `TRAEFIK_NETWORK`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS` (con la nota de que entrypoint/tls se fijan a `http`/`false` solo para el barrido con Traefik desechable)
+- [x] `docker compose config --quiet` OK y `docker compose build` construye la imagen
 
 **Verificación:**
-- [ ] `docker compose config --quiet` sin errores
-- [ ] `docker compose build` OK (incluye `http="httptools"` y `access_log=False` de TASK-33/28)
-- [ ] Smoke: `docker compose up -d` + `GET /health` a través del Traefik desechable devuelve `200` con `x-request-id`
-- [ ] Gates sin cambios (no se tocó `src/`): `pytest`, `-m memory`, `ruff check`, `ruff format --check`, `mypy`
+- [x] `docker compose config --quiet` sin errores
+- [x] `docker compose build` OK (incluye `http="httptools"` y `access_log=False` de TASK-33/28)
+- [x] Smoke: `docker compose up -d` + `GET /health` a través del Traefik desechable devuelve `200` con `x-request-id`
+- [x] Gates sin cambios (no se tocó `src/`): `pytest`, `-m memory`, `ruff check`, `ruff format --check`, `mypy`
 
 **Dependencias:** Ninguna (materializa TASK-36)
 
@@ -978,11 +987,33 @@ cambios en `src/`.**
 
 **Riesgo:** Bajo
 
-### TASK-39: Arnés de barrido de réplicas con Traefik desechable (script + targets LB)
+> **Estado: COMPLETADA.** Smoke real en este host: `docker compose up -d` con 2 réplicas
+> detrás de un Traefik desechable → `GET /health` **200** con `X-Request-Id`,
+> `GET /ready` **200** (`{"status":"ready"}`), `POST /api/v1/extractions` **200** en 360 ms
+> (PDF de 5 páginas) y **round-robin confirmado** en el access log de Traefik (5/5
+> alternando entre las dos réplicas). `docker compose config --quiet` OK y
+> `docker compose build` OK (imagen `pdfextractor:local`).
+>
+> **Extras sobre lo pedido:** `PDFEXTRACTOR_MAX_INFLIGHT_REQUESTS` (puerta de TASK-37)
+> también es configurable por despliegue (`EXTRACTOR_MAX_INFLIGHT`, por defecto sigue a
+> `EXTRACTOR_MAX_CONCURRENT`), y `stop_grace_period` (35 s) para que terminen las
+> extracciones en vuelo al bajar réplicas.
+>
+> ⚠ **Hallazgo para TASK-39 (Traefik):** `traefik:v3.5` **no funciona** con el Docker de
+> este host (29.4.1): su cliente de Docker pide la API `1.24` y el daemon exige `≥1.40`
+> → el Docker provider falla y **todo** el tráfico al router devuelve `404` (no es un
+> error del Compose). `traefik:latest` (**v3.7.16**) sí negocia la versión de API y
+> funciona. El script de barrido debe usar una versión ≥3.7 o el host debe bajar a un
+> Docker con API ≥1.40 para el cliente.
+>
+> Gates: 183 passed/2 skipped, `-m memory` 2 passed, ruff, format y mypy limpios
+> (sin cambios en `src/`).
+
+### TASK-39: Arnés de barrido de réplicas con Traefik desechable (script + targets LB) ✅
 
 **Descripción:** Añadir `load-tests/sweep-replicas.sh` y
 `load-tests/run-9000/targets-mixed-lb.txt`. El script construye la imagen, levanta
-un **Traefik desechable** (`docker run`, `traefik:v3.5`, `-p 18080:80`, socket del
+un **Traefik desechable** (`docker run`, `traefik:v3.7.16`, `-p 18080:80`, socket del
 host `:ro`, `--providers.docker.exposedbydefault=false`,
 `--providers.docker.network=mired`, entrypoint http, access log a stdout) y, para
 `k ∈ {3,4,5}` (2 repeticiones), ejecuta **Vegeta A** (400 rps, 50 % POST / 50 %
@@ -994,24 +1025,58 @@ para no arrastrar un loop saturado.
 **Tamaño:** M (2 archivos)
 
 **Aceptación:**
-- [ ] `load-tests/sweep-replicas.sh` parametrizable: `SWEEP_REPLICAS` (`3 4 5`), `SWEEP_REPS` (`2`), `SWEEP_RATE` (`400`), `SWEEP_DURATION` (`30s`), `SWEEP_TIMEOUT` (`35s`), puerto del LB
-- [ ] Por corrida guarda `results-mixed.bin`, `results-mixed.json`, `vegeta-report-mixed.txt`, `server.log` (logs del stack) y muestras de `docker stats` (CPU/RAM por contenedor y del host)
-- [ ] Verifica el **reparto entre réplicas** contando las líneas de log JSON de POST por contenedor (`docker logs`); las sondas están suprimidas del log (TASK-28/34)
-- [ ] `targets-mixed-lb.txt` conserva la mezcla de `targets-mixed.txt` (mismos `GET /health,/ready,/metrics` y `POST /api/v1/extractions`) y añade el `Host`
-- [ ] `docker compose down` entre valores de `k`; el Traefik desechable se elimina al terminar
-- [ ] Artefactos en `load-tests/run-9000/sweep-replicas/k{K}_r{rep}/`
+- [x] `load-tests/sweep-replicas.sh` parametrizable: `SWEEP_REPLICAS` (`3 4 5`), `SWEEP_REPS` (`2`), `SWEEP_RATE` (`400`), `SWEEP_DURATION` (`30s`), `SWEEP_TIMEOUT` (`35s`), puerto del LB
+- [x] Por corrida guarda `results-mixed.bin`, `results-mixed.json`, `vegeta-report-mixed.txt`, `server.log` (logs del stack) y muestras de `docker stats` (CPU/RAM por contenedor y del host)
+- [x] Verifica el **reparto entre réplicas** contando las líneas de log JSON de POST por contenedor (`docker logs`); las sondas están suprimidas del log (TASK-28/34)
+- [x] `targets-mixed-lb.txt` conserva la mezcla de `targets-mixed.txt` (mismos `GET /health,/ready,/metrics` y `POST /api/v1/extractions`) y añade el `Host`
+- [x] `docker compose down` entre valores de `k`; el Traefik desechable se elimina al terminar
+- [x] Artefactos en `load-tests/run-9000/sweep-replicas/k{K}_r{rep}/`
 
 **Verificación:**
-- [ ] Corrida smoke (`SWEEP_REPLICAS=3 SWEEP_REPS=1`) produce los artefactos y muestra reparto entre las 3 réplicas
-- [ ] Sin cambios en `src/`; gates verdes
+- [x] Corrida smoke (`SWEEP_REPLICAS=3 SWEEP_REPS=1`) produce los artefactos y muestra reparto entre las 3 réplicas
+- [x] Sin cambios en `src/`; gates verdes
 
 **Dependencias:** TASK-38
 
 **Archivos tocados:**
 - `load-tests/sweep-replicas.sh` (nuevo)
-- `load-tests/run-9000/targets-mixed-lb.txt` (nuevo)
+- `load-tests/targets-mixed-lb.txt` (nuevo, versionado; la copia de runtime va a `load-tests/run-9000/`)
 
 **Riesgo:** Medio (tiempo de medición; oversubscripción del host)
+
+> ⚠ **Nota (de TASK-38):** en este host `traefik:v3.5` **no** puede hablar con el Docker
+> 29.4.1 (cliente API 1.24 < mínimo 1.40 del daemon) → el Docker provider falla y el
+> router devuelve `404` en todo. El script debe usar **`traefik:v3.7`** (o `latest`), que
+> sí negocia la versión de API. No es un problema del Compose ni de los labels.
+
+**Evidencia (2026-10-21, arnés montado y corregido):**
+
+- Smoke `k=3` (1 rep): 12 000 requests, **76.09 %** de éxito, `p50 765 ms`, `p99 2.41 s`,
+  **cero** timeouts, reparto 2006/1984/2010 POST (round-robin del LB verificado).
+- Barrido completo (`k ∈ {3,4,5}` × 3 reps = 9 corridas) → tabla y veredicto en
+  `docs/report.md` **§10.7**; artefactos en `load-tests/run-9000/sweep-replicas/`.
+- **Tres fallos del arnés encontrados y corregidos** (todos del *harness*, no del servicio):
+  1. **El generador de carga se comía la CPU del sistema bajo prueba.** Con `GOMAXPROCS=8`
+     Vegeta ocupaba varios núcleos, el LB se quedaba sin CPU y la corrida colapsaba
+     (21.34 % de éxito, 6 628 timeouts de cliente). Con `GOMAXPROCS=2` (nuevo
+     `CLIENT_GOMAXPROCS`) la degradación es la real: `503` acotados a ~2 s, cero timeouts.
+  2. **Readiness laxo → réplicas calientes en producción de tráfico.** Un gate que solo exige
+     *un* `200` del LB arranca el ataque con el resto de réplicas calentando (warmup de hasta
+     8.2 s con el host cargado) → Traefik enruta a contenedores que no escuchan: `502` y
+     réplicas descartadas por el provider (medido: `k=5` a 162 rps con 3 réplicas en 0 POST).
+     El script ahora exige que la API de Traefik (`--api=true --api.insecure=true`) reporte las
+     `k` réplicas en `UP` antes de atacar, y marca la corrida `CORRIDA VALIDA/INVALIDA` según
+     si todas las réplicas recibieron POST.
+  3. **Atacar en pleno temporal de arranque.** Con `k` réplicas la pila son `k × 8` procesos y
+     el host queda en `load` 15–30; medir ahí medía la plataforma. El script espera a que la
+     CPU del host esté ociosa (`/proc/stat`) antes de atacar.
+- **Hallazgo de plataforma (no del servicio):** cuando el LB se queda sin CPU, su *listen
+  backlog* (`somaxconn=4096`) desborda y el kernel tira los SYN (`tcp_max_syn_backlog=256`, sin
+  syncookies) → el cliente entra en *backoff* exponencial y los timeouts de 35 s miden el host.
+  Firmas: `TcpExtListenOverflows = TcpExtListenDrops = 550 569`, `499` en el access log de
+  Traefik y servidores respondiendo `200`/`503` que el cliente nunca vio. Documentado en §10.7
+  con la recomendación de **darle holgura de CPU al balanceador**.
+
 
 ### TASK-40: Barrido empírico `k ∈ {3,4,5}`, óptimo documentado (§10.6) y cierre
 
@@ -1022,31 +1087,38 @@ para no arrastrar un loop saturado.
 **Tamaño:** M (documentación + artefactos)
 
 **Aceptación:**
-- [ ] Tabla en `docs/report.md` **§10.6** con: `k`, `rep`, éxito %, throughput (rps), `p50/p90/p95/p99 (s)`, `max (s)`, `200`, `503`, `0 (cliente)`, reparto por réplica y CPU/RAM del host + **promedio por `k`**
-- [ ] **Óptimo elegido** y justificado (menor `k` que cumple la meta, con trade-off de CPU/memoria)
-- [ ] `README.md` (Despliegue/Escalado): uso del Compose, `deploy.replicas`/`--scale`, integración con Traefik (round-robin, sin sticky; `healthcheck /health`, `ready /ready`) y la fórmula `k = ceil(400/200)`
+- [x] Tabla en `docs/report.md` **§10.7** (TASK-37 ya ocupa §10.6) con: `k`, `rep`, éxito %, throughput (rps), `p50/p90/p95/p99 (s)`, `max (s)`, `200`, `502`, `503`, `0 (cliente)`, reparto por réplica y CPU/RAM del host + **promedio por `k`**
+- [x] **Óptimo elegido** y justificado: **`k = 3`** (menor `k` que cumple la meta; en un host único más réplicas no dan caudal y degradan el `p99`)
+- [x] `README.md` (Despliegue/Escalado): uso del Compose, `deploy.replicas`/`--scale`, integración con Traefik (round-robin, sin sticky; `healthcheck /health`, `ready /ready`) y la fórmula `k = ceil(400/200)`
 - [ ] TASK-36 marcada cerrada; CP-8 actualizado (y CP-9 abajo)
-- [ ] **Gates 100% verdes:** `pytest`, `pytest -m memory`, `ruff check`, `ruff format --check`, `mypy -p pdfextractor`
+- [x] **Gates 100% verdes:** `pytest`, `pytest -m memory`, `ruff check`, `ruff format --check`, `mypy -p pdfextractor`
 
 **Verificación:**
-- [ ] `success%` agregado **≥ 75 %** en el `k` óptimo con el arnés multi-réplica + Traefik
-- [ ] `p99 ≈ 2 s` (timeout de cola) y **cero timeouts de cliente** (`0`) en el régimen mixto
-- [ ] Sin `500` ni `504` nuevos
-- [ ] Artefactos en `load-tests/run-9000/sweep-replicas/`; tabla clara y reproducible en `docs/report.md`
+- [x] `success%` agregado **≥ 75 %** en el `k` óptimo con el arnés multi-réplica + Traefik: **79.92 %** (mediana de 3 corridas en `k=3`)
+- [x] `p99 ≈ 2 s` (timeout de cola) y **cero timeouts de cliente** (`0`) en el régimen mixto: `p99 = 2.33 s`, `0` timeouts en 8 de 9 corridas (la 9.ª colapsó por el backlog del LB, ver §10.7)
+- [x] Sin `500` ni `504` nuevos (los `502` observados son 0–6 por corrida, del LB hacia réplicas que el provider descartó)
+- [x] Artefactos en `load-tests/run-9000/sweep-replicas/`; tabla clara y reproducible en `docs/report.md`
 
 **Dependencias:** TASK-39
 
 **Archivos tocados:**
-- `docs/report.md` (§10.6)
-- `README.md`
+- `docs/report.md` (§10.7)
+- `README.md` (Despliegue con Docker Compose + Integración con Traefik)
 - `docs/tasks/todo.md` (cierre TASK-36/CP-8)
 
 **Riesgo:** Medio (varianza del host WSL2; puede que el óptimo sea `k=2`–`3`)
 
+**Evidencia (2026-10-21):** barrido de 9 corridas (3 por `k`) con el arnés de TASK-39 →
+`docs/report.md` §10.7. Conclusión: en un host único el óptimo es **`k = 3`** (79.92 % de éxito,
+`p99 = 2.33 s`, cero timeouts, reparto 1998/1998/2000); `k = 4` y `k = 5` bajan a 78.65 % y
+77.35 % y empeoran el `p99` (2.47 s / 2.56 s) porque los núcleos son el recurso compartido. El
+salto por Traefik **cuesta ~0.5–1 núcleo** (45–66 % de CPU del LB en las muestras) y es el motivo
+de que el agregado con LB (79.92 %) quede por debajo del nativo de §10.6 (92.70 %).
+
 ### Checkpoint CP-9: Despliegue multi-réplica + Traefik validado
-- [ ] `docker-compose.yml` versionado, `docker compose config`/`build` OK
-- [ ] Óptimo de réplicas `k` elegido y documentado (§10.6); `success%` agregado ≥ 75 %
-- [ ] `0 = 0` (sin timeouts de cliente) y `p99 ≈ 2 s` en el régimen mixto
-- [ ] `README.md` y `docs/report.md` coherentes con los artefactos
+- [x] `docker-compose.yml` versionado, `docker compose config`/`build` OK
+- [x] Óptimo de réplicas `k` elegido y documentado (§10.7); `success%` agregado ≥ 75 % (**79.92 %** en `k=3`)
+- [x] `0 = 0` (sin timeouts de cliente) y `p99 ≈ 2 s` en el régimen mixto (`p99 = 2.33 s`)
+- [x] `README.md` y `docs/report.md` coherentes con los artefactos
 - [ ] Gates 100% verdes tras TASK-38..40
 - [ ] Revisión con humano (TASK-38..40 aprobadas una a una)

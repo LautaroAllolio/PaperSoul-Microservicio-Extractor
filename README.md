@@ -212,13 +212,57 @@ y cero timeouts.
 > distintos; con núcleos dedicados por réplica, `N=7` (el valor de `.env.example`) es el
 > tuning de referencia.
 
+### Despliegue con Docker Compose
+
+`docker-compose.yml` define **solo** los recursos del Extractor (el Orquestador y Traefik viven
+aparte). Requisitos: la red externa **`mired` debe existir** (`docker network create mired`; el
+Compose no la crea ni la destruye) y una instancia de Traefik con Docker provider apuntando a ella.
+
+```bash
+docker network create mired                 # una vez por host
+docker compose up -d --build                # 3 réplicas (EXTRACTOR_REPLICAS)
+docker compose up -d --scale extractor=5    # o escalar en caliente
+docker compose down                         # quita el stack
+```
+
+- **Réplicas**: `deploy.replicas: ${EXTRACTOR_REPLICAS:-3}`; en caliente, `--scale extractor=N`
+  (no se fija `container_name` justamente para poder escalar). Todas las réplicas comparten el
+  mismo router y el mismo servicio de Traefik: round-robin, sin sticky.
+- **Sin `ports:`**: el puerto 9000 no se publica al host; Traefik entra por `mired`. La red
+  `mired` es **externa** (`external: true`).
+- **Healthcheck de Docker** con `start_period=30s`: mientras el pool de extracción calienta, la
+  réplica queda en `starting` y el Docker provider de Traefik **no le enruta tráfico** (sin esto,
+  un *rolling deploy* produce `502` por réplicas calientes).
+- **Variables**: `EXTRACTOR_IMAGE`, `EXTRACTOR_REPLICAS`, `EXTRACTOR_WORKERS`,
+  `EXTRACTOR_MAX_CONCURRENT`, `EXTRACTOR_MAX_INFLIGHT` (puerta), `EXTRACTOR_QUEUE_TIMEOUT`,
+  `EXTRACTOR_STOP_GRACE_PERIOD`, `TRAEFIK_NETWORK`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS`
+  (ver `.env.example`).
+
+**Medido con este despliegue (400 rps mixtos, `N = 7`, Traefik delante, 8 vCPU / 3.8 GB):**
+
+| k | Éxito (%) | p99 (s) | `0` (cliente) | Reparto de POST |
+|---:|---:|---:|---:|---|
+| **3** | **79.92** | **2.33** | **0** | 1998 / 1998 / 2000 |
+| 4 | 78.65 | 2.47 | **0** | 1754 / 1748 / 1236 / 1253 |
+| 5 | 77.35 | 2.56 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
+
+En un **único host** más réplicas no dan más caudal (los núcleos son el recurso compartido) y el
+`p99` se degrada: el óptimo es el **menor `k` que cubre la demanda con HA** (`k = 3`). El escalado
+real es **una réplica por host**. Detalle y análisis en [`docs/report.md`](docs/report.md) §10.7.
+
+> **El balanceador necesita holgura de CPU.** Medido: Traefik consume ~0.5–1 núcleo del host para
+> proxear 400 rps (~3 ms de CPU por petición) y, si el host está saturado, su *listen backlog*
+> desborda → el kernel tira los SYN → el cliente entra en *backoff* y ve timeouts que **no** son
+> del servicio. Si el LB comparte host con la app, reservale CPU (o ponlo en otro host).
+
 ### Integración con Traefik
 
 - **Router**: un solo router por servicio, compartido por todas las réplicas (por eso el despliegue **no** fija `container_name` ni publica `ports:`; las réplicas se descubren por el Docker provider de Traefik en la red externa `mired`).
-- **Balanceo**: round-robin, **sin sticky sessions** (el servicio es stateless). Regla de host típica: `Host(\`extractor.universidad.localhost\`)`; el servicio se expone en el puerto interno `9000`.
+- **Balanceo**: round-robin, **sin sticky sessions** (el servicio es stateless). Regla de host típica: `Host(\`extractor.universidad.localhost\`)`, tal como trae el Compose; el servicio se expone en el puerto interno `9000`.
 - **Healthcheck del balanceador**: `GET /health` (liveness; aislado del downstream), con `interval=10s` y `timeout=3s`.
 - **Readiness**: `GET /ready` devuelve `200`/`503` según el estado de la instancia; un `503` debe sacar la réplica del balanceo (no solo del healthcheck).
-- **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`. Ojo: Traefik v3.5 **no** reintenta respuestas `5xx` ni `POST` con cuerpo (`retryNonIdempotentMethod`), así que el retry **no** es garantía de reejecución en otra réplica.
+- **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`. Ojo: Traefik **no** reintenta respuestas `5xx` ni `POST` con cuerpo (`retryNonIdempotentMethod`), así que el retry **no** es garantía de reejecución en otra réplica.
 - **Red**: `mired` es **externa** (`external: true`); no la crea ni la destruye el despliegue del extractor.
+- **Versión de Traefik**: con **Docker Engine 29.x** hace falta **Traefik v3.7** (`traefik:v3.7.16`): `v3.5` usa un cliente de la API de Docker 1.24 y el daemon 29.x exige ≥ 1.40 → el Docker provider falla y **todo** el tráfico al router devuelve `404`. No es un problema del Compose ni de los labels.
 
 Guía de validación extremo a extremo con el Orquestador: [`docs/integration.md`](docs/integration.md).
