@@ -44,13 +44,11 @@ async def extract_document(
     admission = request.app.state.admission
     boundary = boundary_from_content_type(request.headers.get("content-type", ""))
 
-    if admission.saturated:
-        ready_state.mark_overloaded()
-    try:
-        await admission.admit(settings.queue_timeout_seconds)
-    except OverloadError:
-        ready_state.mark_overloaded()
-        raise
+    # Shedding load is a healthy degradation: the instance keeps serving what
+    # it can, so a rejected request does not degrade the readiness flag
+    # (TASK-37). The rejection itself travels up as ``OverloadError`` and the
+    # global handler renders it as ``503 {"error": "overloaded"}``.
+    await admission.admit(settings.queue_timeout_seconds)
 
     pool = request.app.state.pool
     sink: bytearray | None = None

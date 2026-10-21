@@ -35,7 +35,13 @@ Contrato respaldado por el test de identidad (`tests/extractor/test_repository_i
   ```json
   { "status": "not ready" }
   ```
-  Se degrada a `503` bajo overload (todos los slots de concurrencia ocupados).
+  Solo cuando la instancia está **incapacitada** (p. ej. el process pool se rompió y se está
+  reconstruyendo).
+
+**Semántica de degradación (TASK-37):** rechazar carga es una degradación **sana** —la
+instancia sigue sirviendo lo que puede—, así que el exceso que rechaza la puerta de
+concurrencia (`503 {"error": "overloaded"}`) **no** degrada el readiness: `/ready` sigue en
+`200`. Antes, la saturación degradaba `/ready` a `503` y el orquestador drenaba la réplica.
 
 ### `POST /api/v1/extractions` — extracción PDF → JSON
 
@@ -66,7 +72,13 @@ se aceptan otros campos; el conteo de partes se resuelve con el primer `file`.
 
 **Semántica de concurrencia**
 - Las extracciones corren en un process pool con tope `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`.
-- Si todos los slots están ocupados y la cola agota `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` → `503`.
+- La **puerta del event loop** (`PDFEXTRACTOR_MAX_INFLIGHT_REQUESTS`, por defecto igual al tope de
+  extracciones) admite como máximo ese número de peticiones a la vez. El exceso espera hasta
+  `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` y, si no consigue un slot, se rechaza con
+  `503 {"error": "overloaded"}` **sin leer el cuerpo** (el cliente recibe la respuesta en ~2 s, no
+  expira). `/health`, `/ready` y `/metrics` están exentos de la puerta.
+- Si todos los slots de extracción están ocupados y la cola agota
+  `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` → `503` con el mismo dialecto.
 
 **Referencia `curl`**
 

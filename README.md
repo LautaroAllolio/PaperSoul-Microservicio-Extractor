@@ -41,12 +41,14 @@ Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 | `PDFEXTRACTOR_MIN_TEXT_LENGTH` | `10` | Mínimo de caracteres extraídos para considerar éxito |
 | `PDFEXTRACTOR_WORKERS` | *(uno por CPU)* | Workers del process pool |
 | `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS` | *(= workers)* | Tope de extracciones concurrentes (pool + cola). `7` es el tuning de referencia **medido** para una instancia (≤200 rps); con réplicas co-ubicadas en un host usar `2` (ver *Escalado*) |
-| `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` | `5.0` | Espera máxima en cola antes de `503` |
+| `PDFEXTRACTOR_MAX_INFLIGHT_REQUESTS` | *(= `MAX_CONCURRENT_EXTRACTIONS`)* | Peticiones que el event loop admite a la vez (la *puerta*). El exceso espera `QUEUE_TIMEOUT_SECONDS` y se rechaza con `503 {"error": "overloaded"}` sin leer el cuerpo. `/health`, `/ready` y `/metrics` están exentos |
+| `PDFEXTRACTOR_QUEUE_TIMEOUT_SECONDS` | `5.0` | Espera máxima en cola antes de `503` (también el tope de espera de la puerta) |
 | `PDFEXTRACTOR_EXTRACTION_TIMEOUT_SECONDS` | `30.0` | Tope por extracción antes de `504` |
 | `PDFEXTRACTOR_MAX_PAGES` | `1000` | Tope de páginas (anti decompression-bomb) → `422` |
 | `PDFEXTRACTOR_MAX_EXTRACTED_CHARS` | `5000000` | Tope del texto extraído (anti decompression-bomb) → `422` |
 | `PDFEXTRACTOR_WARMUP` | `true` | Precalienta `min(workers, max_concurrent)` workers al arrancar (evita el cold-start de `forkserver`) |
 | `PDFEXTRACTOR_METRICS_ENABLED` | `true` | Monta `GET /metrics` |
+| `PDFEXTRACTOR_METRICS_CACHE_TTL_SECONDS` | `1.0` | Cache de la exposición Prometheus: una tormenta de scrapes colapsa en un render por TTL (`0` desactiva la cache) |
 | `PDFEXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
 
 ## Ejecución
@@ -80,7 +82,7 @@ Documentación completa y estricta: [`docs/api-contract.md`](docs/api-contract.m
 | Endpoint | Método | Descripción |
 |---|---|---|
 | `/health` | GET | Liveness: `200 {"status":"ok","service":"pdfextractor","version":"..."}` |
-| `/ready` | GET | Readiness: `200 {"status":"ready"}` o `503 {"status":"not ready"}` |
+| `/ready` | GET | Readiness: `200 {"status":"ready"}` o `503 {"status":"not ready"}` (el `503` es para la instancia **incapacitada**; rechazar carga con `503 overloaded` es una degradación sana y **no** degrada el readiness) |
 | `/api/v1/extractions` | POST | `multipart/form-data`, campo `file` → `200` con texto/duración/páginas |
 | `/metrics` | GET | Prometheus text (solo si `PDFEXTRACTOR_METRICS_ENABLED=true`) |
 
@@ -158,11 +160,18 @@ docker build -t pdfextractor:ci .    # build de la imagen
 
 ### Escalado horizontal (múltiples réplicas)
 
-El cuello de una instancia **no es la extracción** sino su *event loop* monohilo (framing HTTP +
-parser multipart): medido con el arnés mixto a 400 rps, subir `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`
-de 4 a 8 solo mueve el éxito de **39 % a ~46–51 %** (el `p90/p95/p99` queda clavado en el timeout de
-cliente). El servicio sí es estable hasta su rodilla: **≤200 rps por instancia ≈ 99 % de éxito**
-(250 rps → ~93 %; a 300 rps colapsa). Ver [`docs/report.md`](docs/report.md) §10.4–§10.5.
+Una instancia tiene su **propia puerta de concurrencia** (TASK-37): el event loop admite un
+número acotado de peticiones a la vez y el exceso se rechaza con `503 {"error": "overloaded"}`
+en ~2 s (`queue_timeout`), **sin** que el cliente llegue a expirar. Medido con el arnés mixto a
+400 rps sobre **una** instancia: **85.46 %** de éxito, `p99 = 2.11 s` y **cero** timeouts de
+cliente, con `/health`, `/ready` y `/metrics` respondiendo `200` en todo momento (antes:
+39–51 % de éxito, `p99 = 35 s` y miles de timeouts). Subir
+`PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS` de 4 a 8 no mueve esa aguja: el límite es del *loop*,
+no del pool de extracción. Ver [`docs/report.md`](docs/report.md) §10.4–§10.6.
+
+El servicio sí es estable hasta su rodilla: **≤200 rps por instancia ≈ 99 % de éxito**
+(250 rps → ~93 %; a 300 rps degrada a `503` en vez de colapsar). Ver
+[`docs/report.md`](docs/report.md) §10.5.
 
 Por eso el escalado es **horizontal**: varias réplicas del contenedor detrás de un balanceador, no
 `uvicorn --workers`. El extractor es **stateless** (cero disco, sin sesión), así que el balanceo es
@@ -185,7 +194,9 @@ demanda_agregada (rps)  ──Traefik (round-robin)──▶  réplica 1 ─┐
 Medición de referencia (400 rps agregados, arnés mixto, réplicas co-ubicadas en un mismo host =
 cota inferior): mono-instancia **39–51 %** de éxito con `p99 = 35 s` y miles de timeouts de
 cliente; `k=2` **~78 %** (media de 4 corridas) y `k=3` **78.13 %**, ambas con `p99 ≈ 2 s` y
-**cero** timeouts de cliente.
+**cero** timeouts de cliente. Con la puerta de TASK-37 las mismas despliegues suben a
+**85.46 %** (1 instancia), **93.37 %** (`k=2`) y **92.70 %** (`k=3`), siempre con `p99 ≈ 2.1 s`
+y cero timeouts.
 
 **Trade-off de las palancas de tuning:**
 

@@ -4,8 +4,9 @@ The extractor owns a process pool (GIL-free MuPDF, plan D4), a bounded
 concurrency gate, a queue timeout that fast-fails saturation with
 ``OverloadError`` (503) instead of queueing forever, and restart-on-crash so a
 dead worker surfaces as a controlled ``{"error"}`` and the pool keeps serving.
-The ``ReadyState`` it shares with the lifespan degrades ``/ready`` to 503 under
-overload and back to 200 once drained.
+The ``ReadyState`` it shares with the lifespan reports "not ready" only while
+the pool is broken and being rebuilt: shedding load is a healthy degradation
+that keeps the instance ready (TASK-37).
 """
 
 import asyncio
@@ -175,6 +176,15 @@ def test_a_worker_crash_is_detected_and_the_pool_keeps_serving(valid_pdf: bytes)
     assert worker_pids
     os.kill(worker_pids[0], signal.SIGKILL)
 
+    # The pool notices the dead worker asynchronously (its manager thread waits
+    # on the child's sentinel). Until it does, the next submit can be served by
+    # the surviving worker and the crash would go unnoticed, so the test waits
+    # for the detection instead of racing it.
+    deadline = time.monotonic() + 10.0
+    while extractor._executor._broken is None and time.monotonic() < deadline:  # type: ignore[attr-defined]
+        time.sleep(0.05)
+    assert extractor._executor._broken is not None  # type: ignore[attr-defined]
+
     with pytest.raises(RuntimeError):
         extractor.extract(valid_pdf)
     assert extractor.restarts >= 1
@@ -273,7 +283,7 @@ def valid_pdf() -> bytes:
         return document.tobytes()
 
 
-async def test_saturation_answers_503_overloaded_and_ready_tracks_recovery() -> None:
+async def test_saturation_answers_503_overloaded_and_readiness_stays_green() -> None:
     app = create_app(
         Settings(
             workers=1,
@@ -315,10 +325,12 @@ async def test_saturation_answers_503_overloaded_and_ready_tracks_recovery() -> 
 
         assert second.status_code == 503
         assert second.json() == {"error": "overloaded"}
-        assert pool.ready_state.ready is False
+        # Shedding load is a healthy degradation (TASK-37): the instance keeps
+        # serving what it can, so the readiness flag is not degraded.
+        assert pool.ready_state.ready is True
 
         busy = await client.get("/ready")
-        assert busy.status_code == 503
+        assert busy.status_code == 200
 
         await first
         await asyncio.sleep(0.3)

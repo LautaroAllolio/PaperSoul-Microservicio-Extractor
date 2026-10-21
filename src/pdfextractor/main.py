@@ -26,6 +26,7 @@ from pdfextractor.infrastructure.config.settings import Settings, get_settings
 from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 from pdfextractor.infrastructure.memory.pool import BufferPool
 from pdfextractor.infrastructure.middleware.middlewares import (
+    ConcurrencyLimitMiddleware,
     RequestIdMiddleware,
     SizeBackstopMiddleware,
 )
@@ -86,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             thread_name_prefix="pdfextractor-t",
         )
         app.state.metrics = bundle
+        app.state.exposition_cache = metrics_api.ExpositionCache(resolved.metrics_cache_ttl_seconds)
         setattr(
             app.state,
             EXTRACTION_SERVICE,
@@ -112,6 +114,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         lifespan=lifespan,
         default_response_class=OrjsonResponse,
+    )
+    # Starlette prepends every middleware, so the last one registered is the
+    # outermost: request-id (correlation + log) -> size backstop (cheap 413) ->
+    # concurrency limit (the front door of the event loop) -> the routes.
+    app.add_middleware(
+        ConcurrencyLimitMiddleware,
+        max_concurrent=resolved.effective_max_inflight_requests,
+        queue_timeout=resolved.queue_timeout_seconds,
     )
     app.add_middleware(SizeBackstopMiddleware, max_upload_bytes=resolved.max_upload_bytes)
     app.add_middleware(RequestIdMiddleware, metrics=bundle)

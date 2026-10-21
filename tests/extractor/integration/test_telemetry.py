@@ -7,6 +7,7 @@ serves the seven plan § 6 metrics from a per-application registry, refreshing
 the pool gauges at scrape time.
 """
 
+import asyncio
 import json
 import logging
 
@@ -125,8 +126,11 @@ async def test_after_a_request_metrics_expose_every_planned_value(client) -> Non
     # A request never sees its own increment: the counter is bumped on
     # ``http.response.start``, after the handler already rendered this body.
     # The first scrape therefore only counts the POST; the second one also
-    # counts the scrape itself.
+    # counts the scrape itself. The exposition is cached for a short TTL
+    # (TASK-37), so the second scrape waits for the cache to expire.
     await client.get("/metrics")
+    ttl = client.app.state.settings.metrics_cache_ttl_seconds
+    await asyncio.sleep(ttl + 0.05)
     response = await client.get("/metrics")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
@@ -166,6 +170,35 @@ async def test_metrics_render_runs_off_the_event_loop(monkeypatch, client) -> No
 
     assert response.status_code == 200
     assert "render" in calls
+
+
+async def test_a_scrape_storm_renders_the_exposition_once(monkeypatch) -> None:
+    """A storm of scrapes must not become a storm of renders (TASK-37).
+
+    Rendering the exposition is Python-heavy and used to starve the event
+    loop: at 100 rps of ``/metrics`` the whole instance stalled and the
+    probes answered in tens of seconds. The exposition is cached for a short
+    TTL, so a storm collapses into a single render.
+    """
+    from pdfextractor.presentation.api.v1 import metrics as metrics_api
+
+    renders: list[str] = []
+    real = metrics_api.run_in_threadpool
+
+    async def spy(func, *args, **kwargs):
+        renders.append(getattr(func, "__name__", repr(func)))
+        return await real(func, *args, **kwargs)
+
+    monkeypatch.setattr(metrics_api, "run_in_threadpool", spy)
+
+    app = create_app(Settings(workers=1))
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            responses = await asyncio.gather(*(client.get("/metrics") for _ in range(20)))
+
+    assert all(response.status_code == 200 for response in responses)
+    assert len(renders) == 1, f"the storm must collapse into one render, got {len(renders)}"
 
 
 async def test_metrics_are_not_mounted_when_disabled() -> None:

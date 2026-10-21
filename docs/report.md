@@ -436,10 +436,13 @@ en esta corrida el `503` acotado se cumple en **todos** los regímenes
    (`admission.admit` en `extract.py:47-53`), con impacto medido en § 3.2–§ 3.4:
    el `503` acotado ahora existe en todos los regímenes y desaparecieron los
    `504` y los cortes de cliente en el régimen de bytes.
-2. **Acotar la admisión de `asyncio.to_thread`** con un semáforo alrededor de
-   `service.extract`, para que el `queue_timeout` de la puerta se mida desde la
-   llegada y no se forme una cola de coroutinas en el executor default. Es lo
-   único que resta del hallazgo § 4.2 (relevante a tasas ≥ 400 rps mixtos).
+2. ~~**Acotar la admisión de `asyncio.to_thread`**~~ — **hecho en TASK-37** (§ 10.6): la
+   admisión se acota **en la puerta del event loop** (`ConcurrencyLimitMiddleware`, `K` =
+   `MAX_INFLIGHT_REQUESTS`, por defecto `= MAX_CONCURRENT_EXTRACTIONS`), de modo que el
+   `queue_timeout` se mide desde la llegada y no se forma una cola de coroutinas en el
+   executor default. Además, las dependencias de la ruta pasaron a `async def` (el camino
+   caliente ya no salta al threadpool) y la exposición de `/metrics` lleva cache TTL, que
+   era lo que realmente congelaba el loop.
 3. **Watch del p95 en el punto ~30–85 rps** como early warning de la rodilla
    (el p95 se degrada dos órdenes de magnitud antes que el p50).
 4. **Re-medir el ataque B (20 pág.) en un host silencioso**: en esta sesión el
@@ -488,6 +491,15 @@ vegeta attack -targets=load-tests/run-9000/targets-20p.txt \
   -output=load-tests/run-9000/results-20p.bin
 vegeta report < load-tests/run-9000/results-20p.bin
 vegeta report --type=json < load-tests/run-9000/results-20p.bin > load-tests/run-9000/results-20p.json
+
+# 6) TASK-37 — barrido de la puerta (K) sobre una instancia + sondas
+#    (reinicia el servicio entre corridas y sondea /health, /ready y /metrics
+#     cada 200 ms mientras dura el ataque)
+./load-tests/sweep-door.sh                    # K = 7, 14, 28 (N = 7, 1 rep)
+SWEEP_KS="7" SWEEP_REPS=3 ./load-tests/sweep-door.sh
+
+# 7) TASK-37 — multi-réplica con la puerta (round-robin, como Traefik)
+./load-tests/run-replicas.sh                  # k = 2 y k = 3 (1 rep)
 ```
 
 > **Secuencia de esta corrida (2026-10-11):** el k6 y el ataque A (mixto) se
@@ -498,7 +510,8 @@ vegeta report --type=json < load-tests/run-9000/results-20p.bin > load-tests/run
 > que el primer POST real ya no paga el arranque en frío de `forkserver`
 > (~3.4 s en la corrida previa).
 
-Artefactos en `load-tests/run-9000/`:
+Artefactos en `load-tests/run-9000/` (ruta **no versionada**: `.gitignore` excluye
+`load-tests/run-9000/`; los guiones y targets sí están en el repo y regeneran todo):
 
 | Archivo | Contenido |
 |---|---|
@@ -509,6 +522,8 @@ Artefactos en `load-tests/run-9000/`:
 | `body5p.bin` / `body20p.bin` | Cuerpos multipart (`checksum` + `file`) |
 | `results-mixed.bin` / `.json` / `vegeta-report-mixed.txt` | Ataque A (mixto) |
 | `results-20p.bin` / `.json` / `vegeta-report-20p.txt` | Ataque B (homogéneo 20 pág.) |
+| `sweep-door-K7-K14-K28/K<k>_r<rep>/` | TASK-37: resultados del barrido de la puerta (`results-mixed.bin/.json`, reporte, `probes.txt` de las sondas, `server.log`) |
+| `replicas-door/k<k>/` | TASK-37: multi-réplica con la puerta (`results-mixed.bin/.json`, reporte, `targets-mixed.txt` round-robin, `probes-<port>.txt`, `server-<port>.log`) |
 
 **Cómo leer los `.json`:** el campo `"success"` es la razón sobre **todos** los
 targets (incluye los `GET` de la sonda en el ataque A) y `"status_codes":{"0":N}`
@@ -516,13 +531,14 @@ son cortes de cliente por timeout, no respuestas del servidor (ver § 3.3).
 
 **Limitaciones:** host compartido (WSL2) — la rodilla es sensible a la carga
 del host entre corridas y las latencias aisladas (§ 3.5) son de una única sesión.
-Los logs de servicio (`server.log`, `server-b.log`) están en `.gitignore`
-(regenerables con el paso 1); los artefactos de medición (`.bin`, `.json`,
-reportes, `k6-output.txt`) sí se versionan. El RSS de § 3.5 es un muestreo
-puntual **en reposo** (no un soak): T16 sigue abierto. Los cuerpos `valid_*`
-son sintéticos (páginas de texto aleatorio). k6 corrió como snap (sin permiso
-de escritura fuera del home, por lo que no se generó el `--summary-export`
-JSON; el reporte textual es equivalente).
+Todo `load-tests/run-9000/` está en `.gitignore` (logs del servicio y también los
+artefactos de medición `.bin`, `.json` y reportes): son **regenerables** con los
+pasos 1–7 de este apartado y con los scripts `load-tests/sweep-door.sh` y
+`load-tests/run-replicas.sh`; lo que sí se versiona son los guiones, los targets y
+el body. El RSS de § 3.5 es un muestreo puntual **en reposo** (no un soak): T16
+sigue abierto. Los cuerpos `valid_*` son sintéticos (páginas de texto aleatorio).
+k6 corrió como snap (sin permiso de escritura fuera del home, por lo que no se generó
+el `--summary-export` JSON; el reporte textual es equivalente).
 
 ## 9. Cambios de comportamiento (TASK-12..28) que explican la diferencia
 
@@ -631,6 +647,11 @@ Por separado, las sondas son gratis (100 % a 400 rps) y el extractor sostiene **
 
 El cuello es el **event loop monohilo** (framing HTTP + parser multipart en Python puro, ~11 MB/s) —no la extracción, no el host—. Al saturarse, la concurrencia en vuelo se dispara (Ley de Little: a 400 rps y 35 s de timeout caben ~14 000 peticiones) y el servicio entra en un colapso por timeouts. El tamaño del pool (`N`) no puede aliviar el loop.
 
+> **Corrección (TASK-37, §10.6):** esta atribución **no se sostiene**. El encuadre multipart
+> cuesta 0.051 ms por 55 549 B (≈1 GB/s, no 11 MB/s) y el loop no estaba quemando CPU: estaba
+> **esperando** el salto al threadpool de las dependencias síncronas y la tormenta de renders de
+> `/metrics`. La puerta del event loop (TASK-37) eliminó el colapso sin tocar `N`.
+
 **Curva de capacidad por instancia** (arnés mixto, `N=7`, una instancia limpia):
 
 | R ofrecidos (mixto rps) | Éxito (%) | Throughput (rps) | p50 (s) | p99 (s) | Códigos |
@@ -663,6 +684,9 @@ agregados, `QUEUE_TIMEOUT_SECONDS=2`, timeout de cliente 35 s):
 | 1 instancia, `N=7` (mejor `N` del barrido) | 400 | **50.72** | 35.002 | 21–43 % | § 10.4 |
 | `k = 2` réplicas (`N` por réplica sin tocar) | 200 | **82.77 / 79.71 / 74.62 / 74.15** (media **77.81**) | ~2.1 | **0** | validación multi-réplica |
 | `k = 3` réplicas (**recomendado**) | 133 | **78.13** | 2.21 | **0** | validación multi-réplica |
+| **1 instancia con la puerta (TASK-37)** | 400 | **85.46** | **2.110** | **0** | § 10.6 |
+| **`k = 2` con la puerta (TASK-37)** | 200 | **93.37** | **2.137** | **0** | § 10.6 |
+| **`k = 3` con la puerta (TASK-37)** | 133 | **92.70** | **2.213** | **0** | § 10.6 |
 
 La lectura es directa: la mono-instancia **no** alcanza la meta en ningún `N` (39–51 %, con el
 `p90/p95/p99` clavado en el timeout de cliente y miles de `0`), mientras que repartir la misma
@@ -677,7 +701,101 @@ limpia) y **cero timeouts de cliente**.
 | 2 réplicas × 200 rps (400 total) — 4 corridas | 82.77 / 79.71 / 74.62 / 74.15 | ~2.1 | 0 |
 | 3 réplicas × 133 rps (399 total) | 78.13 | 2.21 | 0 |
 
-**Veredicto:** repartir la demanda entre ≥2 réplicas sitúa el agregado en **~75–83 %** (cota inferior con todas las réplicas en un host; en contenedores separados cada una sigue su curva de instancia, ~99 % a 200 rps), **con backpressure limpia** (`p99 ≈ 2 s`, el timeout de cola) y **cero timeouts de cliente** —frente al colapso a 35 s de una sola instancia—. El dimensionamiento queda cerrado como `k = ceil(demanda_agregada / 200)` con `k = 3` recomendado (HA + holgura), y el tuning por instancia (`N = 7`) documentado en `.env.example`/`README.md`. El hardening opcional (TASK-37) acota la concurrencia del event loop para que una instancia aislada degradada falle rápido con `503` en lugar de colapsar.
+**Veredicto:** repartir la demanda entre ≥2 réplicas sitúa el agregado en **~75–83 %** (cota inferior con todas las réplicas en un host; en contenedores separados cada una sigue su curva de instancia, ~99 % a 200 rps), **con backpressure limpia** (`p99 ≈ 2 s`, el timeout de cola) y **cero timeouts de cliente** —frente al colapso a 35 s de una sola instancia—. El dimensionamiento queda cerrado como `k = ceil(demanda_agregada / 200)` con `k = 3` recomendado (HA + holgura), y el tuning por instancia (`N = 7`) documentado en `.env.example`/`README.md`. El hardening del event loop (TASK-37, §10.6) **elimina además el colapso de la instancia aislada** (85.46 % de éxito y `p99 = 2.11 s` a 400 rps) y sube el agregado multi-réplica a **~93 %**, confirmando que la atribución de este §10.5 (cuello = CPU del loop / parser multipart) era incorrecta.
+
+### 10.6 TASK-37: la puerta del event loop (corrige la atribución de §10.5)
+
+**La atribución de §10.5 era incorrecta.** §10.5 atribuyó el colapso a 400 rps al *event loop
+monohilo* (framing HTTP + parser multipart en Python puro, ~11 MB/s) y a su CPU al ~96 % de un
+núcleo. Las mediciones de TASK-37 desmienten esa lectura:
+
+| Medición | Resultado | Lectura |
+|---|---|---|
+| Encuadre multipart de 55 549 B | **0.051 ms** (≈1 GB/s) | el parser **no** es el cuello (ni de lejos: 11 MB/s) |
+| Dependencias `get_request_id` / `get_extraction_service` (síncronas) | se resuelven en el **threadpool** (`anyio.to_thread.run_sync`); la ida y vuelta crece de **22 ms a 18.5 s** bajo carga | *convoy del GIL*: el loop no está quemando CPU, está **esperando** el salto al pool de hilos |
+| Peticiones en vuelo antes de la puerta | ~1 600 tareas / ~3 000 conexiones | la cola se acumula **antes** de la puerta: el fail-fast de TASK-12 actuaba tarde |
+| `/metrics` a 100 rps | cada scrape renderiza la exposición (Python) + gauges del pool | **tormenta de renders**: sin cache, `/metrics` era lo que ahogaba al loop (ver abajo) |
+
+El colapso tenía dos causas, ambas medidas, y ninguna era "el event loop va al 96 % de CPU":
+
+1. **El salto al threadpool de las dependencias síncronas.** FastAPI resuelve una dependencia
+   `def` (no `async def`) en el pool de hilos; bajo carga ese ida y vuelta crecía a 18.5 s y
+   las peticiones se acumulaban en el loop **antes** de llegar a la puerta de concurrencia.
+2. **La tormenta de `/metrics`.** El mixto de Vegeta A incluye 1/6 de `GET /metrics` (100 rps).
+   Cada scrape renderizaba la exposición completa en Python y consultaba los gauges del pool:
+   con 100 rps de eso, **toda** respuesta se retrasaba (p90 del cliente 28 s) y las sondas
+   respondían en decenas de segundos. Medido: **sin** `/metrics` en el mixto, el mismo ataque a
+   400 rps daba **92.31 %** de éxito y p50 **24.7 ms**; **con** `/metrics`, **67.69 %** y p50
+   **2.438 s**.
+
+**Qué se implementó (3 cambios, todos con test):**
+
+| Cambio | Dónde | Efecto |
+|---|---|---|
+| Dependencias de la ruta a `async def` | `presentation/api/deps.py` | el camino caliente **no** salta al threadpool (antes: 22 ms → 18.5 s) |
+| `ConcurrencyLimitMiddleware` (la puerta) | `infrastructure/middleware/middlewares.py` | el loop admite `K` peticiones; el exceso espera hasta `queue_timeout` y se rechaza con `503 {"error": "overloaded"}` **sin encuadrar el cuerpo** |
+| Cache de la exposición (TTL 1 s, single-flight) | `presentation/api/v1/metrics.py` | una tormenta de scrapes colapsa en **un** render por TTL; el resto se sirve de memoria |
+
+La puerta va **por delante** de la ruta (`RequestId → SizeBackstop → Puerta → router`): el slot
+se toma desde la puerta hasta el final de la respuesta, así que el exceso se rechaza antes de
+leer el cuerpo. `/health`, `/ready` y `/metrics` están **exentos** (son baratas y deben seguir
+respondiendo mientras la instancia sacrifica carga). El semáforo se crea *lazy* por event loop
+(la app se construye fuera del loop).
+
+**Contrato de degradación (decisión del humano):** rechazar carga es una **degradación sana** —
+la instancia sigue sirviendo lo que puede, así que **`/ready` permanece en `200`** mientras
+pueda servir. El `503` de readiness queda reservado a la instancia **incapacitada** (pool roto
+y en reconstrucción). Antes, la saturación degradaba `/ready` a `503` y el orquestador
+drenaba la réplica.
+
+**Barrido de la puerta (`K` = peticiones en vuelo), 400 rps mixtos, `N = 7`, 1 instancia**
+(script `load-tests/sweep-door.sh`; artefactos en `load-tests/run-9000/sweep-door-K7-K14-K28/`):
+
+| K | Éxito (%) | p50 (s) | p90 (s) | p99 (s) | max (s) | `0` (cliente) | 503 acotado | Sondas |
+|---:|---:|---:|---:|---:|---:|---:|---|---|
+| **7 (= N)** | 85.46 | 0.469 | 2.048 | **2.110** | 2.284 | **0** | p50 2.002 s, máx 2.08 s | 99/99/99 en `200`, **0 timeouts** |
+| 14 (= 2N) | 88.48 | 0.656 | 2.094 | 2.152 | 2.282 | **0** | p50 2.002 s | 95/95/95 en `200`, 0 timeouts |
+| 28 (= 4N) | 87.52 | 0.776 | 2.197 | 2.290 | 2.701 | **0** | p50 2.002 s | 100/100/100 en `200`, 0 timeouts |
+
+Los tres valores cumplen los criterios (`0 = 0`, `p99 ≈ 2 s`, `503` acotado, sondas vivas); se
+**elige `K = N`** (7) como default porque es el más conservador: el loop nunca sostiene más
+trabajo que el que la instancia puede terminar, y es el de mejor `p99`/`max`. `K` es ajustable
+con `PDFEXTRACTOR_MAX_INFLIGHT_REQUESTS`.
+
+**Antes vs. después (1 instancia, 400 rps mixtos, `N = 7`):**
+
+| | Antes (TASK-35) | Después (TASK-37) |
+|---|---|---|
+| Éxito | 50.72 % (media de 2 corridas) | **85.46 %** |
+| `0` (timeout de cliente) | 4041–4728 (**34–39 %**) | **0** |
+| p50 / p90 / p99 | 11.6–14.2 s / 35.001 s / 35.002 s | **0.469 / 2.048 / 2.110 s** |
+| `503` | tardío, `p90 = 35 s` | **acotado a ~2 s** (`queue_timeout`) |
+| Sondas | `/health`, `/ready` y `/metrics` con timeouts de cliente | **todas `200`**, 0 timeouts (curl 2 s: `/health` 14.8 ms, `/ready` 8.8 ms, `/metrics` 12.9 ms) |
+
+**Multi-réplica revalidada con la puerta** (400 rps agregados, round-robin, réplicas
+co-ubicadas en este host de 8 núcleos / 3.8 GB — cota inferior; script
+`load-tests/run-replicas.sh`, artefactos en `load-tests/run-9000/replicas-door/`):
+
+| Despliegue | Éxito (%) | p50 (s) | p99 (s) | `0` (cliente) | Sondas |
+|---|---:|---:|---:|---:|---|
+| 1 instancia (`K = N = 7`) | 85.46 | 0.469 | 2.110 | **0** | todas `200` |
+| `k = 2` réplicas | **93.37** | 0.315 | 2.137 | **0** | 460/460 en `200`, 0 timeouts |
+| `k = 3` réplicas | **92.70** | 0.485 | 2.213 | **0** | 656/656 en `200`, 0 timeouts |
+
+Comparado con la validación previa de §10.5 (`k=2`: 74.15–82.77 %, `k=3`: 78.13 %), la puerta
+**mejora** el agregado y, sobre todo, cambia la forma del fallo: `p99 ≈ 2.1 s` (el timeout de
+cola) y **cero** timeouts de cliente, frente al colapso a 35 s. CP-8 (≥75 % de éxito, 0 timeouts)
+se cumple con holgura en `k = 2` y `k = 3`.
+
+**Efecto colateral de la door en la suite:** el salto al threadpool de las dependencias
+síncronas era, además, un multiplicador de tiempo en los tests: el nuevo archivo de tests de la
+puerta baja de **23.8 s** a **1.6 s**.
+
+**Test flaky preexistente corregido:** `test_a_worker_crash_is_detected_and_the_pool_keeps_serving`
+era una carrera (~8 % de fallos): el pool detecta el worker muerto de forma asíncrona (el hilo
+gestor espera el *sentinel* del hijo) y, hasta que lo detecta, el `submit` siguiente lo puede
+servir el worker superviviente y el crash pasaba desapercibido. Ahora el test **espera la
+detección** (`executor._broken`) antes de exigir el `RuntimeError`: 10/10 verde.
 
 ## 8. Referencias
 

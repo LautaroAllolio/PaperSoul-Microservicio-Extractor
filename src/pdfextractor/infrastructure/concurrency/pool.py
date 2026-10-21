@@ -219,6 +219,11 @@ class ProcessPoolTextExtractor:
         with self._lifecycle:
             if self._closed:
                 return
+            # A broken worker leaves the instance unable to serve: it reports
+            # "not ready" while the pool is rebuilt and recovers as soon as the
+            # failed job releases its slot (TASK-37). Shedding load is *not* a
+            # reason to degrade readiness.
+            self._ready_state.mark_overloaded()
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = ProcessPoolExecutor(max_workers=self._workers, mp_context=_MP_CONTEXT)
             self._restarts += 1

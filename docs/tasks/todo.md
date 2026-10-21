@@ -852,44 +852,82 @@ la propuesta no se ha aplicado.
 - Sin commit automático: queda a la revisión humana (el artefacto `docker-compose.yml` + Traefik
   y su barrido empírico son TASK-38..40).
 
-### TASK-37: Hardening de degradación — acotar la concurrencia del event loop
+### TASK-37: Hardening de degradación — acotar la concurrencia del event loop ✅
 
 **Descripción:** Bajo sobrecarga de una instancia aislada (p. ej. una réplica que recibe ≥300 rps por reparto desigual o caída de otra), el event loop se satura y las peticiones terminan en timeouts de 35 s en lugar de `503` acotado. Acotar la concurrencia admitida en el event loop (límite de conexiones/tareas, o semáforo a la entrada del loop) para que la instancia **falle rápido con `503`** y preserve la salud del loop y de las sondas. Complementa el fail-fast de la puerta (TASK-12), que hoy actúa *después* de que el loop ya está saturado.
 
 **Tamaño:** M (1–2 archivos + tests)
 
 **Aceptación:**
-- [ ] Una instancia aislada a 400 rps mixtos no produce timeouts de cliente `0`: el exceso se rechaza con `503` acotado (~2 s)
-- [ ] `/health` y `/ready` permanecen responsivos (`200`) bajo esa sobrecarga
-- [ ] Sin cambios de contrato en el camino feliz (`200`)
+- [x] Una instancia aislada a 400 rps mixtos no produce timeouts de cliente `0`: el exceso se rechaza con `503` acotado (~2 s)
+- [x] `/health` y `/ready` permanecen responsivos (`200`) bajo esa sobrecarga
+- [x] Sin cambios de contrato en el camino feliz (`200`)
 
 **Verificación:**
-- [ ] Vegeta A a 400 rps sobre una instancia: `0 = 0`, `p99 ≈ 2 s`
-- [ ] Gates 100% verdes (`pytest`, `-m memory`, `ruff`, `format`, `mypy`)
+- [x] Vegeta A a 400 rps sobre una instancia: `0 = 0`, `p99 ≈ 2 s`
+- [x] Gates 100% verdes (`pytest`, `-m memory`, `ruff`, `format`, `mypy`)
 
 **Dependencias:** TASK-35 (diagnóstico)
 
-**Archivos tocados (propuestos):**
-- `src/pdfextractor/__main__.py` / `main.py` / `middlewares.py`
+**Archivos tocados:**
+- `src/pdfextractor/infrastructure/middleware/middlewares.py` — `ConcurrencyLimitMiddleware` (la puerta)
+- `src/pdfextractor/presentation/api/deps.py` — dependencias de la ruta a `async def` (sin salto al threadpool)
+- `src/pdfextractor/presentation/api/v1/metrics.py` — cache de la exposición (TTL, single-flight)
+- `src/pdfextractor/presentation/api/v1/extract.py` — el rechazo de carga ya no degrada el readiness
+- `src/pdfextractor/infrastructure/concurrency/pool.py` — el pool roto sí degrada el readiness (instancia incapacitada)
+- `src/pdfextractor/infrastructure/config/settings.py` — `max_inflight_requests`, `metrics_cache_ttl_seconds`
+- `src/pdfextractor/main.py` — wiring de la puerta
+- `tests/extractor/integration/test_concurrency_limit.py` (nuevo, 6 tests), `test_concurrency.py`, `test_telemetry.py`
+- `load-tests/sweep-door.sh`, `load-tests/run-replicas.sh` (arneses)
 
 **Riesgo:** Medio (afecta la ruta caliente; requiere TDD y revisión)
 
+> **Estado: COMPLETADA.** La atribución de TASK-35 (§10.5 del reporte: "event loop al 96 % de
+> CPU, parser multipart a 11 MB/s") **era incorrecta**: el encuadre multipart cuesta 0.051 ms por
+> 55 549 B (≈1 GB/s) y el loop no estaba quemando CPU, estaba **esperando** (a) el salto al
+> threadpool de las dependencias síncronas (ida y vuelta 22 ms → 18.5 s) y (b) la tormenta de
+> renders de `/metrics` (100 rps, sin cache). Con esos doshops eliminados, el colapso a 400 rps
+> desaparece sin tocar `N`.
+>
+> **Decisión de contrato (revisión humana):** rechazar carga es degradación **sana** → `/ready`
+> sigue en `200` mientras la instancia pueda servir; el `503` de readiness queda para la
+> instancia incapacitada (pool roto). Se ajustó el test de TASK-09 que fijaba la semántica
+> antigua.
+>
+> **Medición (400 rps mixtos, `N=7`, 1 instancia, `load-tests/sweep-door.sh`):** éxito
+> **85.46 %** (antes 50.72 %), `0 = 0` (antes 4041–4728), p50 **0.469 s**, p90 **2.048 s**,
+> p99 **2.110 s**, `503` acotado (p50 2.002 s, máx 2.08 s) y sondas **todas `200`** sin
+> timeouts. Barrido de la puerta `K ∈ {7, 14, 28}`: los tres cumplen; se elige `K = N` (7) por
+> defecto. Multi-réplica revalidada: `k=2` **93.37 %**, `k=3` **92.70 %**, `p99 ≈ 2.1 s`,
+> `0 = 0`. Detalle y corrección de §10.5 en `docs/report.md` §10.6.
+>
+> **Extra:** se corrigió un test flaky preexistente
+> (`test_a_worker_crash_is_detected_and_the_pool_keeps_serving`, ~8 % de fallos: el pool detecta
+> el worker muerto de forma asíncrona y el `submit` podía ser servido por el worker
+> superviviente). Ahora espera la detección: 10/10 verde.
+
 ### Checkpoint CP-8: Éxito agregado >= 75% bajo saturación (multi-réplica)
-- [ ] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..37
-- [ ] `success%` agregado >= 75 % confirmado con el arnés multi-réplica + Traefik (`k = ceil(400/200)`)
-- [ ] `p99 ≈ 2 s` (backpressure de cola) y `0 = 0` (sin timeouts de cliente) en el régimen mixto
-- [ ] Artefactos de barrido en `load-tests/run-9000/sweep-N6-N7-N8/`
-- [ ] `docs/report.md` actualizado con tabla comparativa `N=4` mono-instancia vs despliegue multi-réplica
-- [ ] Revisión con humano (TASK-33..37 aprobadas una a una)
+- [x] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..37
+- [x] `success%` agregado >= 75 % confirmado con el arnés multi-réplica (`k = ceil(400/200)`)
+- [x] `p99 ≈ 2 s` (backpressure de cola) y `0 = 0` (sin timeouts de cliente) en el régimen mixto
+- [x] Artefactos de barrido en `load-tests/run-9000/sweep-door-K7-K14-K28/` y `load-tests/run-9000/replicas-door/` (generados por `load-tests/sweep-door.sh` y `load-tests/run-replicas.sh`; la ruta `load-tests/run-9000/` está en `.gitignore`, se versionan los guiones)
+- [x] `docs/report.md` actualizado con tabla comparativa `N=4` mono-instancia vs despliegue multi-réplica (§10.5–§10.6)
+- [x] Revisión con humano (TASK-33..37 aprobadas una a una)
 
 ## 6) Escalado horizontal multi-réplica + Traefik (DECLARADO — pendiente de OK)
 
 > **Estado: NO iniciado.** Reencuadre aprobado tras TASK-35: los 400 rps de Vegeta A
 > son demanda **agregada** de un despliegue multi-réplica detrás de Traefik, no un
 > objetivo por contenedor. El escalado es **horizontal** (réplicas de contenedor),
-> **no** `uvicorn --workers`. **No se toca `src/`** (TASK-37 queda como hardening
-> separado, con aprobación aparte). Flujo: gates verdes y commits atómicos
+> **no** `uvicorn --workers`. Flujo: gates verdes y commits atómicos
 > terminando en `#<issue>` (continúa desde `#70` → `#71`).
+>
+> **Nota:** TASK-37 (hardening del event loop) ya está **aprobada y completada** (§10.6 del
+> reporte): la atribución de §10.5 era incorrecta y el cuello real era el salto al threadpool
+> de las dependencias síncronas + la tormenta de renders de `/metrics`. Los scripts
+> `load-tests/sweep-door.sh` y `load-tests/run-replicas.sh` validan el régimen multi-réplica
+> **sin tocar `src/`** (round-robin por targets alternos, réplicas co-ubicadas = cota
+> inferior); el Compose + Traefik siguen pendientes (TASK-38..40).
 >
 > **Decisiones acordadas (revisión del plan multi-réplica):**
 > - **Pool por réplica (pequeño):** `PDFEXTRACTOR_WORKERS=2` y

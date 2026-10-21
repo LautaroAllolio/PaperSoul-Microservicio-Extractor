@@ -31,10 +31,12 @@ class Settings(BaseSettings):
     min_text_length: int = 10
     workers: int | None = None
     max_concurrent_extractions: int | None = None
+    max_inflight_requests: int | None = None
     queue_timeout_seconds: float = 5.0
     extraction_timeout_seconds: float = 30.0
     max_pages: int = 1000
     max_extracted_chars: int = 5_000_000
+    metrics_cache_ttl_seconds: float = 1.0
     warmup: bool = True
     metrics_enabled: bool = True
     log_level: str = "INFO"
@@ -74,6 +76,20 @@ class Settings(BaseSettings):
             raise ValueError("must be at least 1 when set")
         return value
 
+    @field_validator("max_inflight_requests")
+    @classmethod
+    def _validate_max_inflight_requests(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("must be at least 1 when set")
+        return value
+
+    @field_validator("metrics_cache_ttl_seconds")
+    @classmethod
+    def _validate_metrics_cache_ttl_seconds(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("must not be negative")
+        return value
+
     @field_validator("queue_timeout_seconds", "extraction_timeout_seconds")
     @classmethod
     def _validate_timeout(cls, value: float) -> float:
@@ -98,6 +114,15 @@ class Settings(BaseSettings):
     def effective_max_concurrent_extractions(self) -> int:
         """Concurrency gate: explicit value or the worker count."""
         return self.max_concurrent_extractions or self.effective_workers
+
+    @property
+    def effective_max_inflight_requests(self) -> int:
+        """Requests the event loop serves at once: explicit value or the gate capacity.
+
+        The front door admits as many requests as the extraction gate can work
+        on, so the loop never holds more work than the instance can finish.
+        """
+        return self.max_inflight_requests or self.effective_max_concurrent_extractions
 
 
 @lru_cache

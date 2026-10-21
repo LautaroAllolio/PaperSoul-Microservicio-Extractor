@@ -1,4 +1,4 @@
-"""Infrastructure middlewares (plan § 5: request-id, size backstop).
+"""Infrastructure middlewares (plan § 5: request-id, size backstop, front door).
 
 One middleware owns the correlation id: ``X-Correlation-Id`` (the header the
 orchestrator forwards) is read with ``X-Request-Id`` as fallback, parked on the
@@ -6,9 +6,14 @@ request where the ``get_request_id`` dependency finds it, and echoed under the
 same header on the way out. The size backstop rejects a body whose declared
 ``Content-Length`` already exceeds the ceiling, before a single byte is framed
 — the streaming reader enforces the same budget mid-stream, so this is a cheap
-early reject, not the primary guard.
+early reject, not the primary guard. The concurrency limit is the front door of
+the event loop: it admits a bounded number of requests and rejects the excess
+with the same ``503 {"error": "overloaded"}`` dialect the admission gate uses,
+so an overloaded instance sheds load instead of piling requests until the
+clients time out.
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -18,15 +23,20 @@ from typing import Any
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 from pdfextractor.infrastructure.telemetry.metrics import Metrics
 
-__all__ = ["RequestIdMiddleware", "SizeBackstopMiddleware"]
+__all__ = ["ConcurrencyLimitMiddleware", "RequestIdMiddleware", "SizeBackstopMiddleware"]
 
 _REQUEST_ID = b"x-request-id"
 _CORRELATION_ID = b"x-correlation-id"
 _LOGGER = logging.getLogger("pdfextractor.http")
 
 _PROBE_PATHS = frozenset({"/health", "/ready"})
+
+# Observability endpoints are cheap and must keep answering while the instance
+# sheds load, so the front door never counts them.
+_DOOR_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics"})
 
 
 class RequestIdMiddleware:
@@ -142,6 +152,74 @@ class SizeBackstopMiddleware:
             await response(scope, receive, send)
             return
         await self._app(scope, receive, send)
+
+
+class ConcurrencyLimitMiddleware:
+    """Admit a bounded number of requests into the event loop at a time.
+
+    The front door is the instance's admission control for the *loop*: it keeps
+    at most ``max_concurrent`` requests inside the application and parks the
+    rest for up to ``queue_timeout`` seconds. A request that cannot get a slot
+    in time is rejected with the same ``503 {"error": "overloaded"}`` dialect
+    the admission gate uses and without framing its body, so an overloaded
+    instance sheds load in bounded time instead of piling requests until the
+    clients time out (TASK-37).
+
+    Rejecting is a healthy degradation — the instance keeps serving what it
+    can — so the readiness flag is not degraded here. The observability
+    endpoints (``/health``, ``/ready``, ``/metrics``) are exempt: they are
+    cheap and must keep answering while the instance sheds load.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_concurrent: int,
+        queue_timeout: float,
+        exempt_paths: frozenset[str] = _DOOR_EXEMPT_PATHS,
+    ) -> None:
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be at least 1")
+        self._app = app
+        self._max_concurrent = max_concurrent
+        self._queue_timeout = queue_timeout
+        self._exempt_paths = exempt_paths
+        self._semaphore: asyncio.Semaphore | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"] in self._exempt_paths:
+            await self._app(scope, receive, send)
+            return
+
+        gate = self._gate()
+        try:
+            await asyncio.wait_for(gate.acquire(), timeout=self._queue_timeout)
+        except TimeoutError:
+            state = scope.setdefault("state", {})
+            state["outcome"] = "error"
+            state["error_type"] = "OverloadError"
+            response = OrjsonResponse(status_code=503, content={"error": "overloaded"})
+            await response(scope, receive, send)
+            return
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            gate.release()
+
+    def _gate(self) -> asyncio.Semaphore:
+        """Return the semaphore of the running loop, creating it on demand.
+
+        The middleware is built when the application is created, which happens
+        outside any event loop; the semaphore is created lazily so it always
+        belongs to the loop that serves the requests.
+        """
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._loop is not loop:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+            self._loop = loop
+        return self._semaphore
 
 
 def _inbound_correlation_id(scope: Scope) -> tuple[bytes, str] | None:
