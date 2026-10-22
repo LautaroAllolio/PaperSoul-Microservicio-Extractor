@@ -795,7 +795,15 @@ puerta baja de **23.8 s** a **1.6 s**.
 era una carrera (~8 % de fallos): el pool detecta el worker muerto de forma asíncrona (el hilo
 gestor espera el *sentinel* del hijo) y, hasta que lo detecta, el `submit` siguiente lo puede
 servir el worker superviviente y el crash pasaba desapercibido. Ahora el test **espera la
-detección** (`executor._broken`) antes de exigir el `RuntimeError`: 10/10 verde.
+detección** (`executor._broken`) antes de exigir el `RuntimeError`.
+
+> **Corrección posterior (verificada al cerrar TASK-40).** La espera original comprobaba
+> `_broken is None`, y eso **nunca esperaba en Python 3.12**: `ProcessPoolExecutor` inicializa
+> `_broken` a `False` (no `None`) y recién lo reemplaza por el mensaje de fallo cuando el hilo
+> gestor detecta al hijo muerto. El `while` salía en la primera iteración, la carrera seguía
+> viva y el test fallaba ~30 % de las veces (medido: 3/10 y 4/10 en dos series de 10).
+> La espera ahora es por **veracidad** (`while not ..._broken`), que funciona tanto en 3.11
+> (`None`) como en 3.12+ (`False`), y el test quedó **15/15 verde** de forma reproducible.
 
 ### 10.7 TASK-39/40: despliegue real (Compose + Traefik) y barrido de réplicas
 
@@ -804,7 +812,9 @@ detección** (`executor._broken`) antes de exigir el `RuntimeError`: 10/10 verde
 **400 rps** (50 % `POST` / 50 % sondas) durante 30 s, `N = 7` workers por réplica, puerta `K = N`,
 `queue_timeout = 2 s`. Script `load-tests/sweep-replicas.sh`; artefactos por corrida en
 `load-tests/run-9000/sweep-replicas/k{K}_r{rep}/` (resultados Vegeta, access log de Traefik, log
-JSON de cada réplica, muestras de `docker stats` y reparto de POST entre réplicas).
+JSON de cada réplica, muestras de `docker stats` y reparto de POST entre réplicas). Los targets
+mixtos están versionados en `load-tests/targets-mixed-lb.txt` (fuente única) y el arnés deriva de
+ahí la copia runtime con el puerto y el `Host:` del despliegue local.
 
 **Barrido `k ∈ {3,4,5}` × 3 réplicas (9 corridas, 400 rps mixtos, `N = 7`):**
 
@@ -820,19 +830,19 @@ JSON de cada réplica, muestras de `docker stats` y reparto de POST entre répli
 | 5 | 2 | **19.69** | 18.9 | 35.926 | 41.486 | 42.442 | 43.051 | 43.068 | 1248 | 6 | 293 | **4792** | 43 | 385 % | 35.3 | 570 / 570 / 552 / 559 / 554 |
 | 5 | 3 | 76.91 | 287.0 | 0.359 | 2.356 | 2.452 | 2.674 | 3.840 | 9228 | 0 | 2771 | **0** | 1 | 51 % | 26.8 | 1074 / 1367 / 1174 / 1168 / 1216 |
 
-**Promedio por `k`** (mediana de las 3 corridas; la corrida colapsada de `k=5` se cuenta aparte):
+**Agregado por `k`** (mediana de las 3 corridas, incluida la colapsada de `k=5`):
 
 | k | Éxito (%) | p99 (s) | Throughput (rps) | `200` | `503` | `0` (cliente) | Reparto |
 |---:|---:|---:|---:|---:|---:|---:|---|
 | **3** | **79.92** | **2.333** | 298.5 | 9590 | 2410 | **0** | 1998 / 1998 / 2000 |
 | 4 | 78.65 | 2.465 | 293.9 | 9438 | 2560 | **0** | 1754 / 1748 / 1236 / 1253 |
-| 5 | 77.35 | 2.559 | 288.8 | 9282 | 2716 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
+| 5 | 76.91 | 2.674 | 287.0 | 9228 | 2660 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
 
-**Veredicto: el óptimo sigue siendo `k = 3`** (el menor `k` probado, y el que ya recommendationaba
+**Veredicto: el óptimo sigue siendo `k = 3`** (el menor `k` probado, y el que ya recomendaba
 §10.5/§10.6 por HA + holgura). En un **único host** más réplicas **no** dan más caudal: los
-núcleos son el recurso compartido y el reparto es cada vez más uneven (`k=4`: 1754/1748/1236/1253;
+núcleos son el recurso compartido y el reparto es cada vez más desigual (`k=4`: 1754/1748/1236/1253;
 `k=5`: ~1 200 cada una frente a las ~2 000 de `k=3`), el `p99` se degrada monótonamente
-(2.33 → 2.47 → 2.56 s) y el éxito baja (79.92 → 78.65 → 77.35 %). El escalado real es **una
+(2.33 → 2.47 → 2.67 s) y el éxito baja (79.92 → 78.65 → 76.91 %). El escalado real es **una
 réplica por host** (`k = ceil(demanda / 200)`), como documenta §10.5.
 
 **Lo que cuesta el salto por el balanceador (medido, no supuesto).** Comparando el mismo `k=3` con
@@ -862,10 +872,10 @@ servidores respondiendo `200`/`503` que el cliente nunca vio. Disparadores encon
    provider. Medido: `k=5` rep=1 a **162 rps** con **3 réplicas en 0 POST**. El arnés ahora exige
    que la API de Traefik reporte las `k` réplicas en `UP` antes de atacar.
 
-Con las tres correcciones, **8 de 9** corridas.validaron con **cero timeouts** y `p99 ≈ 2.3 s`; la
+Con las tres correcciones, **8 de 9** corridas validaron con **cero timeouts** y `p99 ≈ 2.3 s`; la
 novena (`k=5` rep=2) colapsó por el mismo mecanismo de la plataforma (`4792` timeouts, `43` `499`).
 El riesgo residual es intrínseco a **co-ubicar el LB con la app en un host saturado**: el LB es un
-proceso único que concentration las 400 rps en un solo listener. **Recomendación: el balanceador
+proceso único que concentra las 400 rps en un solo listener. **Recomendación: el balanceador
 necesita holgura de CPU (host propio, o al menos un núcleo reservado)**, y en producción hay que
 vigilar `TcpExtListenOverflows` junto con la latencia del LB.
 
@@ -874,6 +884,17 @@ vigilar `TcpExtListenOverflows` junto con la latencia del LB.
 réplica que todavía está calentando queda en `starting` y el **Docker provider de Traefik no le
 enruta tráfico** → un *rolling deploy* no produce `502` por réplicas calientes. (El healthcheck de
 Traefik `interval=10s` no cubría esa ventana: su primer muestreo cae después del warmup.)
+
+**Códigos de estado en las 9 corridas:** `200` 76 820, `503` 20 711 (la puerta, acotada a ~2 s),
+`502` **15** (del LB hacia réplicas que el provider descartó) y `0` 4 792 (los timeouts de la
+corrida colapsada). **Ningún `500` ni `504`**, y ningún error de aplicación en los logs de las
+réplicas: el extractor no produjo fallos internos en todo el barrido.
+
+**Gates al cierre:** `pytest` **183 passed / 2 skipped**, `pytest -m memory` **2 passed**,
+`ruff check` y `ruff format --check` limpios, `mypy -p pdfextractor` sin errores,
+`docker compose config` válido y `bash -n` del arnés sin complaints. Al cerrar la tarea se
+corrigió además el flake real del test de crash del worker (ver §10.6), que en el estado previo
+fallaba ~30 % de las veces.
 
 ## 8. Referencias
 

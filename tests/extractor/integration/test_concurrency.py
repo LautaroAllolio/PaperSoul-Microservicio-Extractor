@@ -180,10 +180,16 @@ def test_a_worker_crash_is_detected_and_the_pool_keeps_serving(valid_pdf: bytes)
     # on the child's sentinel). Until it does, the next submit can be served by
     # the surviving worker and the crash would go unnoticed, so the test waits
     # for the detection instead of racing it.
+    #
+    # The flag is checked for truthiness on purpose: CPython 3.12 initialises
+    # ``ProcessPoolExecutor._broken`` to False (3.11 used None) and replaces it
+    # with the failure message when the manager thread detects the dead child.
+    # Testing "is None" would never wait on 3.12 -- the loop would exit
+    # immediately and the race this test is meant to avoid came back.
     deadline = time.monotonic() + 10.0
-    while extractor._executor._broken is None and time.monotonic() < deadline:  # type: ignore[attr-defined]
+    while not extractor._executor._broken and time.monotonic() < deadline:  # type: ignore[attr-defined]
         time.sleep(0.05)
-    assert extractor._executor._broken is not None  # type: ignore[attr-defined]
+    assert extractor._executor._broken  # type: ignore[attr-defined]
 
     with pytest.raises(RuntimeError):
         extractor.extract(valid_pdf)

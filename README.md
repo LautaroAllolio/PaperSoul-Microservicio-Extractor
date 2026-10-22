@@ -244,7 +244,7 @@ docker compose down                         # quita el stack
 |---:|---:|---:|---:|---|
 | **3** | **79.92** | **2.33** | **0** | 1998 / 1998 / 2000 |
 | 4 | 78.65 | 2.47 | **0** | 1754 / 1748 / 1236 / 1253 |
-| 5 | 77.35 | 2.56 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
+| 5 | 76.91 | 2.67 | 4792 (1 de 3 corridas) | ~1 200 / réplica |
 
 En un **único host** más réplicas no dan más caudal (los núcleos son el recurso compartido) y el
 `p99` se degrada: el óptimo es el **menor `k` que cubre la demanda con HA** (`k = 3`). El escalado

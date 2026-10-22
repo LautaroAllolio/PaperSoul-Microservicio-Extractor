@@ -909,7 +909,10 @@ la propuesta no se ha aplicado.
 > **Extra:** se corrigió un test flaky preexistente
 > (`test_a_worker_crash_is_detected_and_the_pool_keeps_serving`, ~8 % de fallos: el pool detecta
 > el worker muerto de forma asíncrona y el `submit` podía ser servido por el worker
-> superviviente). Ahora espera la detección: 10/10 verde.
+> superviviente). Ahora espera la detección por veracidad (`while not ..._broken`): 15/15 verde.
+> *Corrección al cerrar TASK-40:* la espera original (`_broken is None`) no esperaba en Python
+> 3.12, donde la bandera nace en `False`; el flake seguía vivo (~30 %) y se corrigió de verdad
+> al cierre de TASK-40. Detalle en `docs/report.md` §10.6.
 
 ### Checkpoint CP-8: Éxito agregado >= 75% bajo saturación (multi-réplica)
 - [x] Suite completa + `-m memory` + `ruff` + `mypy` verdes tras TASK-33..37
@@ -918,6 +921,7 @@ la propuesta no se ha aplicado.
 - [x] Artefactos de barrido en `load-tests/run-9000/sweep-door-K7-K14-K28/` y `load-tests/run-9000/replicas-door/` (generados por `load-tests/sweep-door.sh` y `load-tests/run-replicas.sh`; la ruta `load-tests/run-9000/` está en `.gitignore`, se versionan los guiones)
 - [x] `docs/report.md` actualizado con tabla comparativa `N=4` mono-instancia vs despliegue multi-réplica (§10.5–§10.6)
 - [x] Revisión con humano (TASK-33..37 aprobadas una a una)
+- [x] **Re-validado con el salto por el balanceador** (TASK-39/40, §10.7): `k = 3` detrás de Traefik → **79.92 %** de éxito, `p99 = 2.33 s`, **cero** timeouts de cliente (la meta de ≥75 % se cumple también con el LB en el camino)
 
 ## 6) Escalado horizontal multi-réplica + Traefik (EN CURSO — TASK-38 ✅, TASK-39 ✅, TASK-40 en curso de revisión)
 
@@ -936,7 +940,7 @@ la propuesta no se ha aplicado.
 > de las dependencias síncronas + la tormenta de renders de `/metrics`. Los scripts
 > `load-tests/sweep-door.sh` y `load-tests/run-replicas.sh` validan el régimen multi-réplica
 > **sin tocar `src/`** (round-robin por targets alternos, réplicas co-ubicadas = cota
-> inferior); el Compose + Traefik siguen pendientes (TASK-38..40).
+> inferior); el Compose + Traefik ya están cerrados (TASK-38..40).
 >
 > **Decisiones acordadas (revisión del plan multi-réplica):**
 > - **Pool por réplica (pequeño):** `PDFEXTRACTOR_WORKERS=2` y
@@ -1090,7 +1094,7 @@ para no arrastrar un loop saturado.
 - [x] Tabla en `docs/report.md` **§10.7** (TASK-37 ya ocupa §10.6) con: `k`, `rep`, éxito %, throughput (rps), `p50/p90/p95/p99 (s)`, `max (s)`, `200`, `502`, `503`, `0 (cliente)`, reparto por réplica y CPU/RAM del host + **promedio por `k`**
 - [x] **Óptimo elegido** y justificado: **`k = 3`** (menor `k` que cumple la meta; en un host único más réplicas no dan caudal y degradan el `p99`)
 - [x] `README.md` (Despliegue/Escalado): uso del Compose, `deploy.replicas`/`--scale`, integración con Traefik (round-robin, sin sticky; `healthcheck /health`, `ready /ready`) y la fórmula `k = ceil(400/200)`
-- [ ] TASK-36 marcada cerrada; CP-8 actualizado (y CP-9 abajo)
+- [x] TASK-36 marcada cerrada; CP-8 actualizado (y CP-9 abajo)
 - [x] **Gates 100% verdes:** `pytest`, `pytest -m memory`, `ruff check`, `ruff format --check`, `mypy -p pdfextractor`
 
 **Verificación:**
@@ -1111,7 +1115,7 @@ para no arrastrar un loop saturado.
 **Evidencia (2026-10-21):** barrido de 9 corridas (3 por `k`) con el arnés de TASK-39 →
 `docs/report.md` §10.7. Conclusión: en un host único el óptimo es **`k = 3`** (79.92 % de éxito,
 `p99 = 2.33 s`, cero timeouts, reparto 1998/1998/2000); `k = 4` y `k = 5` bajan a 78.65 % y
-77.35 % y empeoran el `p99` (2.47 s / 2.56 s) porque los núcleos son el recurso compartido. El
+76.91 % y empeoran el `p99` (2.47 s / 2.67 s) porque los núcleos son el recurso compartido. El
 salto por Traefik **cuesta ~0.5–1 núcleo** (45–66 % de CPU del LB en las muestras) y es el motivo
 de que el agregado con LB (79.92 %) quede por debajo del nativo de §10.6 (92.70 %).
 
@@ -1120,5 +1124,5 @@ de que el agregado con LB (79.92 %) quede por debajo del nativo de §10.6 (92.70
 - [x] Óptimo de réplicas `k` elegido y documentado (§10.7); `success%` agregado ≥ 75 % (**79.92 %** en `k=3`)
 - [x] `0 = 0` (sin timeouts de cliente) y `p99 ≈ 2 s` en el régimen mixto (`p99 = 2.33 s`)
 - [x] `README.md` y `docs/report.md` coherentes con los artefactos
-- [ ] Gates 100% verdes tras TASK-38..40
+- [x] Gates 100% verdes tras TASK-38..40
 - [ ] Revisión con humano (TASK-38..40 aprobadas una a una)

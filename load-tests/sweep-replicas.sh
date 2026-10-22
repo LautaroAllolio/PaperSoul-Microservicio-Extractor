@@ -16,6 +16,22 @@
 #   ./load-tests/sweep-replicas.sh                    # k=3,4,5 x 2 reps
 #   SWEEP_REPLICAS=3 SWEEP_REPS=1 ./load-tests/sweep-replicas.sh
 #
+# Las tres condiciones sin las cuales la corrida mide la PLATAFORMA y no el
+# servicio (las tres se pueden desactivar por entorno para diagnosticar):
+#
+#   1. CLIENT_GOMAXPROCS=2  el generador de carga no puede robarle la CPU al
+#      sistema bajo prueba; si se queda sin CPU, el LB desborda su listen
+#      backlog (somaxconn=4096), el kernel tira los SYN (tcp_max_syn_backlog
+#      =256, sin syncookies) y el cliente entra en backoff exponencial: los
+#      timeouts de 35 s no son del servicio (se ven como 499 en el access log
+#      de Traefik).
+#   2. Readiness real: las k réplicas deben estar "UP" en la API de Traefik
+#      (su healthcheck les respondió /health). Con un gate laxo el ataque
+#      arranca mientras el resto de las réplicas calienta y Traefik enruta a
+#      contenedores que todavía no escuchan -> 502 y réplicas descartadas.
+#   3. Host ocioso antes de medir: al levantar la pila (k x 8 procesos) el host
+#      queda saturado; medir en pleno temporal de arranque mide el arranque.
+#
 # Nota de versión de Traefik: v3.5 usa un cliente de Docker que pide la API
 # 1.24, y el daemon de Docker Engine 29.x exige >= 1.40 -> el Docker provider
 # falla y TODO el tráfico al router devuelve 404. Se usa v3.7.16, que sí
@@ -179,17 +195,13 @@ wait_host_idle() {
   log "host did not settle within ${max_wait}s (cpu=${busy}%); measuring anyway"
 }
 
-# Targets del LB: la mezcla versionada con el puerto y el host de esta corrida.
+# Targets del LB: se derivan del fichero versionado (fuente única de la mezcla)
+# sustituyendo el puerto y el host de esta corrida.
 write_lb_targets() {
   mkdir -p "${RUN_DIR}"
-  {
-    for path in /health /ready /metrics; do
-      printf 'GET http://127.0.0.1:%s%s\nHost: %s\n\n' "${LB_PORT}" "${path}" "${LB_HOST}"
-    done
-    for _ in 1 2 3; do
-      printf 'POST http://127.0.0.1:%s/api/v1/extractions\nHost: %s\n\n' "${LB_PORT}" "${LB_HOST}"
-    done
-  } >"${LB_TARGETS}"
+  sed -e "s|127\.0\.0\.1:18080|127.0.0.1:${LB_PORT}|g" \
+      -e "s|^Host: extractor\.universidad\.localhost$|Host: ${LB_HOST}|" \
+    "${LB_TARGETS_SRC}" >"${LB_TARGETS}"
 }
 
 # Muestreo de CPU/RAM por contenedor + carga del host durante el ataque.
@@ -313,7 +325,11 @@ mkdir -p "${OUT_DIR}"
 for k in ${SWEEP_REPLICAS}; do
   for rep in $(seq 1 "${SWEEP_REPS}"); do
     echo "==================== k=${k} rep=${rep} ===================="
-    run_one "${k}" "${rep}"
+    # Una corrida abortada (LB que no levanta, imagen que no compila) no debe
+    # tumbar el barrido entero: se registra y se sigue con la siguiente.
+    if ! run_one "${k}" "${rep}"; then
+      log "k=${k} rep=${rep}: corrida abortada"
+    fi
   done
 done
 
