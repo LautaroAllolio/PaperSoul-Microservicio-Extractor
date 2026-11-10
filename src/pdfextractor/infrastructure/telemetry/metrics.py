@@ -1,4 +1,4 @@
-"""Prometheus metrics for the Extractor (docs/tasks/plan.md § 6).
+"""Prometheus metrics for the Extractor.
 
 Each application instance owns a private ``CollectorRegistry`` so parallel apps
 in one process (tests, embedded deployments) never mix counters. The gauges are

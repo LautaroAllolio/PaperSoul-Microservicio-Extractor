@@ -4,9 +4,8 @@
 > el endpoint de despliegue **`http://localhost:9000/api/v1/extractions`**
 > (Task 10). Todas las cifras citadas provienen de los artefactos
 > reproducibles en `load-tests/run-9000/` (ver [§ 7](#7-reproducibilidad-y-artefactos)).
-> Los umbrales T1–T16 usados para el veredicto (§ 5) son los definidos para
-> esta tarea en `docs/tasks/plan.md`; el contrato verificado proviene de
-> `docs/api-contract.md`.
+> Los umbrales T1–T16 usados para el veredicto están definidos en § 5; el
+> contrato verificado proviene de `docs/api-contract.md`.
 
 **Fecha de medición:** 2026-10-11 (tercera corrida) · **Herramientas:** k6
 v2.3.0 (snap), Vegeta v12.13.0 · **Entorno:** WSL2 (Ubuntu sobre Windows),
@@ -21,10 +20,9 @@ workers activo (`PDFEXTRACTOR_WARMUP=true`).
 > **reemplazan** las cifras de la corrida de 2026-10-09: la comparativa
 > cuantitativa (antes/después, por régimen) está en la tabla de delta de § 3 y el
 > impacto atribuible a cada tarea en
-> [§ 9](#9-cambios-de-comportamiento-task-1228-que-explican-la-diferencia); el
-> anexo de pruebas de robustez sigue en `docs/optimization-report.md`. **TASK-28**
-> (logging no bloqueante, sin access log y fast-path de sondas) es posterior a esa
-> corrida: su efecto se mide aparte, en un A/B pareado, en § 3.6.
+> [§ 9](#9-cambios-de-comportamiento-task-1228-que-explican-la-diferencia).
+> **TASK-28** (logging no bloqueante, sin access log y fast-path de sondas) es
+> posterior a esa corrida: su efecto se mide aparte, en un A/B pareado, en § 3.6.
 
 ## 1. Alcance
 
@@ -546,10 +544,10 @@ Las cifras de § 3 y el veredicto de § 5 corresponden al binario **posterior** 
 la suite de robustez (TASK-12…TASK-24) **y** a las tres optimizaciones de la fase
 de velocidad pura (TASK-25 Markdown nativo, TASK-26 warm-up de workers, TASK-27
 `orjson`). Esta sección resume **qué cambió** respecto de la corrida del
-2026-10-09 y por eso los números se movieron. El detalle de cada tarea (con sus
-tests) vive en `docs/tasks/todo.md` y `docs/optimization-report.md`. **TASK-28**
-se incluye al final por completitud, pero es posterior a la corrida de § 3 y su
-efecto se mide en el A/B pareado de § 3.6 (no en las tablas de § 3).
+2026-10-09 y por eso los números se movieron. El detalle de cada tarea está
+resumido en la tabla siguiente. **TASK-28** se incluye al final por completitud,
+pero es posterior a la corrida de § 3 y su efecto se mide en el A/B pareado de
+§ 3.6 (no en las tablas de § 3).
 
 | Cambio | Dónde | Efecto observado en esta corrida |
 |---|---|---|
@@ -898,18 +896,15 @@ fallaba ~30 % de las veces.
 
 ## 8. Referencias
 
-- `docs/tasks/plan.md` — alcance, ruta `POST /api/v1/extractions` (AD6) y
-  tareas de integración (TASK-07…TASK-11).
 - `docs/api-contract.md` — contrato de endpoints y cuerpos verificados.
-- `docs/optimization-report.md` — auditoría de PyMuPDF y optimizaciones.
 - `src/pdfextractor/presentation/api/v1/extract.py`,
   `src/pdfextractor/infrastructure/concurrency/pool.py`,
   `src/pdfextractor/infrastructure/http/multipart_reader.py`,
   `src/pdfextractor/infrastructure/memory/pool.py` — mapa de etapas y
   sensibilidad al tiempo (Ley de Little, WIP).
-- `docs/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf` — DoD como
-  medidas de calidad (p. 12), inspección/adaptación (p. 4).
-- `docs/pdfs/scrum_manager_historias_usuario.pdf` — RNF objetivo/restricción/
-  línea base (p. 24), historias abiertas (p. 29).
-- `docs/pdfs/Essential-Kanban-Condensed-Spanish.pdf` — no confiar en el
-  promedio (PDF 48), Ley de Little (PDF 26).
+- Scrum Guide (2020, versión en español) — DoD como medidas de calidad
+  (p. 12), inspección/adaptación (p. 4).
+- Scrum Manager — historias de usuario — RNF objetivo/restricción/línea base
+  (p. 24), historias abiertas (p. 29).
+- Essential Kanban Condensed (español) — no confiar en el promedio (PDF 48),
+  Ley de Little (PDF 26).

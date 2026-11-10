@@ -15,7 +15,7 @@ def _cpu_count() -> int:
 
 
 class Settings(BaseSettings):
-    """Extractor application settings (docs/tasks/plan.md § 7)."""
+    """Extractor application settings."""
 
     model_config = SettingsConfigDict(
         env_prefix="PDFEXTRACTOR_",

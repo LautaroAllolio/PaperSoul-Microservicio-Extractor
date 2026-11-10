@@ -1,4 +1,4 @@
-"""Domain exceptions for pdfextractor (docs/tasks/plan.md § 8 failure matrix).
+"""Domain exceptions for pdfextractor (docs/api-contract.md § Errores).
 
 Each subclass pins the ``status`` and the bounded, client-facing ``{"error"}``
 message that the presentation layer renders. The Extractor speaks the compact

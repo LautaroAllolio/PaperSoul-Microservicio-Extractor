@@ -1,9 +1,9 @@
 /**
  * Task 12 — load / soak harness for the `pdfextractor` microservice.
  *
- * Contract under test: `docs/tasks/plan-extractor.md` § 4 (routes and success
- * body) and § 8 (failure-mode matrix).  Nothing here is guessed: every expected
- * status comes from `fixtures/manifest.json`, produced by `gen_fixtures.py`.
+ * Contract under test: `docs/api-contract.md` (routes and success body) and its
+ * failure matrix.  Nothing here is guessed: every expected status comes from
+ * `fixtures/manifest.json`, produced by `gen_fixtures.py`.
  *
  * Profiles (`LOAD_PROFILE`):
  *   ci    bounded run for CI — a handful of requests per scenario.

@@ -1,4 +1,4 @@
-"""Single-line JSON structured logging (docs/tasks/plan.md § 6, TASK-28).
+"""Single-line JSON structured logging (TASK-28).
 
 The ``pdfextractor.http`` logger records every request with the contract fields
 (``request_id``, ``duration_ms``, ``bytes``, ``pages``, ``method``, ``outcome``,

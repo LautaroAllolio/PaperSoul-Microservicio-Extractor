@@ -125,5 +125,4 @@ curl -i -X POST http://localhost:8001/api/v1/extractions \
 
 ## Referencias
 
-- `docs/tasks/plan.md` — plan de unificación del repositorio.
 - `tests/extractor/` — suite que respalda este contrato.

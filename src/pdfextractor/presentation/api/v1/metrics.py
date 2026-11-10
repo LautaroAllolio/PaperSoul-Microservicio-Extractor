@@ -1,4 +1,4 @@
-"""``GET /metrics``: Prometheus text exposition (docs/tasks/plan.md § 6).
+"""``GET /metrics``: Prometheus text exposition.
 
 The route refreshes the pool gauges from the live process-pool extractor and
 serves the application's private registry. ``render`` runs on the worker
