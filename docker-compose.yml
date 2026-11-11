@@ -1,15 +1,15 @@
 # Compose del Extractor. Define ÚNICAMENTE los recursos propios del Extractor:
-# no incluye Traefik (que descubre las réplicas por su Docker provider) ni los
-# demás servicios de PaperSoul, que se despliegan por separado y se alcanzan a
-# través de la red externa `mired`.
+# no incluye Traefik ni Consul (que descubre las réplicas por el provider
+# Consul Catalog de Traefik) ni los demás servicios de PaperSoul, que se
+# despliegan por separado y se alcanzan a través de la red externa `mired`.
 #
 # No publica el puerto 9000 al host (lo expone Traefik dentro de `mired`) y no
 # fija `container_name`, así que se pueden levantar varias réplicas.
 #
-# Los labels replican el patrón del Compose del Orquestador: un único router y
-# un único servicio (compartidos por todas las réplicas) con balanceo y
-# healthcheck. `entrypoints` y `tls` son sustituibles por entorno para que el
-# barrido pueda usar un Traefik desechable por HTTP sin editar este archivo.
+# El routing ya NO vive en labels Docker: cada réplica se registra ante el
+# agente Consul (CONSUL_HTTP_ADDR) con tags `traefik.*` idénticas entre réplicas
+# — un único router y un único servicio (compartidos) con balanceo y
+# healthcheck. Ver `src/pdfextractor/infrastructure/discovery/consul.py`.
 name: papersoul-extractor
 
 services:
@@ -36,51 +36,30 @@ services:
       PDFEXTRACTOR_WARMUP: ${PDFEXTRACTOR_WARMUP:-true}
       PDFEXTRACTOR_METRICS_ENABLED: ${PDFEXTRACTOR_METRICS_ENABLED:-true}
       PDFEXTRACTOR_LOG_LEVEL: ${PDFEXTRACTOR_LOG_LEVEL:-INFO}
+      # --- Registro en Consul (tareas 7 y 8 del plan de integración) ---------
+      # Habilita el registro de la réplica ante el agente Consul (API HTTP en
+      # `mired`). Sin Consul (vacía) la réplica arranca igual y reintenta en
+      # background: sirve para dev local sin Docker e integración por etapas.
+      CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-http://consul:8500}
+      # IP que la réplica anuncia en `mired`. Vacía = autodetección de la
+      # primera IPv4 no loopback; fijarla solo si el contenedor tiene varias
+      # redes.
+      EXTRACTOR_ADVERTISE_ADDR: ${EXTRACTOR_ADVERTISE_ADDR:-}
+      # Tags traefik.* del registro: entrypoint y TLS del router (el Compose
+      # las pasa a la app; ya no interpolan labels del contenedor).
+      EXTRACTOR_ENTRYPOINT: ${EXTRACTOR_ENTRYPOINT:-https}
+      EXTRACTOR_TLS: ${EXTRACTOR_TLS:-true}
     # Margen para que terminen las extracciones en vuelo (el timeout de
-    # extracción es 30 s) antes de que el contenedor muera.
+    # extracción es 30 s) y el desregistro ordenado ante Consul entre en la
+    # ventana, antes de que el contenedor muera.
     stop_grace_period: ${EXTRACTOR_STOP_GRACE_PERIOD:-35s}
     deploy:
       replicas: ${EXTRACTOR_REPLICAS:-3}
     networks:
       - mired
-    # Descubrimiento de las réplicas por el Docker provider de Traefik. Labels
-    # del servicio (compartidos por todas las réplicas): un único router y un
-    # único servicio con balanceo y healthcheck, por eso NO fijamos
-    # container_name. La instancia Traefik usa exposedByDefault=false: sin
-    # traefik.enable=true el contenedor quedaría invisible para el proxy.
-    labels:
-      - "traefik.enable=true"
-      # IP a usar dentro de la red compartida (Traefik vive en `mired`).
-      - "traefik.docker.network=mired"
-      # El router va por https en el despliegue real; el barrido usa un Traefik
-      # desechable con entrypoint http (EXTRACTOR_ENTRYPOINT=http).
-      - "traefik.http.routers.extractor.entrypoints=${EXTRACTOR_ENTRYPOINT:-https}"
-      # Host cubierto por el certificado estático (wildcard *.universidad.localhost).
-      # Solo Host: el extractor sirve varios paths (/api/v1/extractions, /health,
-      # /ready, /metrics) y no debe acotar el router a uno.
-      - "traefik.http.routers.extractor.rule=Host(`extractor.universidad.localhost`)"
-      # Sin certresolver (el Traefik existente usa cert.pem/key.pem estáticos): solo
-      # se marca TLS para que el entrypoint https sirva el certificado del default
-      # TLS store.
-      - "traefik.http.routers.extractor.tls=${EXTRACTOR_TLS:-true}"
-      - "traefik.http.routers.extractor.middlewares=extractor-retry"
-      # Las réplicas comparten este nombre de servicio: Traefik las agrupa y balancea.
-      - "traefik.http.services.extractor.loadbalancer.server.port=9000"
-      # Health check del balanceador = liveness GET /health (aislado del downstream).
-      - "traefik.http.services.extractor.loadbalancer.healthcheck.path=/health"
-      - "traefik.http.services.extractor.loadbalancer.healthcheck.interval=10s"
-      - "traefik.http.services.extractor.loadbalancer.healthcheck.timeout=3s"
-      # Retry limitado a lo que ofrece Traefik v3.5: reintenta solo cuando el backend
-      # no responde (error de conexión/sin respuesta). v3.5 NO reintenta respuestas
-      # 5xx (status) ni POST con cuerpo (retryNonIdempotentMethod); por eso esto NO
-      # es una garantía de reejecución en otra instancia.
-      - "traefik.http.middlewares.extractor-retry.retry.attempts=2"
-      - "traefik.http.middlewares.extractor-retry.retry.initialinterval=500ms"
-    # Healthcheck de Docker, además del que hace Traefik sobre /health. El
-    # `start_period` cubre el calentamiento del pool de extracción: hasta ~8 s
-    # con el host saturado, el contenedor no responde y quedaría en "starting".
-    # El Docker provider de Traefik no enruta a un contenedor que no esté
-    # "healthy", así que un rolling deploy no genera 502 por réplicas calientes.
+    # Healthcheck de Docker, independiente de Traefik y Consul. El `start_period`
+    # cubre el calentamiento del pool de extracción: hasta ~8 s con el host
+    # saturado, el contenedor no responde y quedaría en "starting".
     healthcheck:
       test:
         - CMD
@@ -91,7 +70,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    # Sin `ports:` (no se publica al host) y sin `container_name` (permite escalar).
+    # Sin `ports:` (no se publica al host), sin `container_name` (permite
+    # escalar) y sin labels `traefik.*`: el routing pasa por las tags del
+    # registro Consul (Consul Catalog provider), no por el Docker provider.
 
 networks:
   # Red del stack de Traefik: administrada fuera de este Compose. No se crea ni
