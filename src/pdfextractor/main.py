@@ -3,7 +3,10 @@
 The lifespan owns every process-wide resource the contract needs: resolved
 settings, the bounded buffer pool that feeds the multipart reader, the
 application service behind the ``TextExtractor`` port, and the readiness flag
-that ``/ready`` reports and later tasks degrade under overload.
+that ``/ready`` reports and later tasks degrade under overload. Since the
+Consul integration it also owns the replica registration: a background task
+that keeps retrying while the agent is unavailable and is deregistered in
+the ordered shutdown, before the pool closes.
 """
 
 import asyncio
@@ -23,6 +26,7 @@ from pdfextractor.infrastructure.concurrency.pool import (
     ReadyState,
 )
 from pdfextractor.infrastructure.config.settings import Settings, get_settings
+from pdfextractor.infrastructure.discovery.consul import ConsulRegistrar, build_registrar
 from pdfextractor.infrastructure.http.orjson_response import OrjsonResponse
 from pdfextractor.infrastructure.memory.pool import BufferPool
 from pdfextractor.infrastructure.middleware.middlewares import (
@@ -58,11 +62,18 @@ async def _warmup(extractor: ProcessPoolTextExtractor, *, enabled: bool) -> dict
     return {"warmed": warmed, "duration_seconds": time.monotonic() - started_at}
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    registrar: ConsulRegistrar | None = None,
+) -> FastAPI:
     """Build the pdfextractor application.
 
     ``settings`` is accepted so a caller (a test, an embedding app) can hand
     over a resolved configuration; omitted, it comes from the environment.
+    ``registrar`` injects a registration double for tests; omitted, it is
+    built from the settings when ``CONSUL_HTTP_ADDR`` is set (without it the
+    app never talks to Consul).
     """
     resolved = get_settings() if settings is None else settings
     configure_logging(resolved.log_level)
@@ -100,9 +111,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.ready = True
         app.state.warmup = await _warmup(extractor, enabled=resolved.warmup)
+        # Consul registration (plan tasks 7-8): a background task that never
+        # blocks startup and retries with a growing delay while the agent is
+        # unavailable. ``None`` when CONSUL_HTTP_ADDR is unset.
+        active_registrar = registrar if registrar is not None else build_registrar(resolved)
+        app.state.consul_registrar = active_registrar
+        registration_task: asyncio.Task[None] | None = None
+        if active_registrar is not None:
+            registration_task = asyncio.create_task(
+                active_registrar.register_with_retry(),
+                name="pdfextractor-consul-registration",
+            )
+            app.state.consul_registration_task = registration_task
         try:
             yield
         finally:
+            # Ordered shutdown: stop the retries, leave the catalog and only
+            # then close the pool. A deregistration failure only logs; the
+            # critical check removes the service after the configured window.
+            if registration_task is not None:
+                registration_task.cancel()
+                try:
+                    await registration_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    _LOGGER.warning(
+                        "consul registration task stopped with an error",
+                        extra={"error_type": "ConsulRegistrationError"},
+                        exc_info=True,
+                    )
+            if active_registrar is not None:
+                await active_registrar.deregister()
             extractor.close()
             thread_exec = getattr(app.state, "thread_executor", None)
             if thread_exec is not None:
