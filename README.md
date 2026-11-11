@@ -9,6 +9,7 @@ Microservicio FastAPI de extracción **PDF → JSON**: recibe un PDF por `multip
 - **Límites**: tamaño máximo de upload, timeout de cola y timeout de extracción configurables.
 - **Correlación**: header `X-Request-Id` (se hereda o se genera) y logs JSON estructurados.
 - **Observabilidad**: `GET /metrics` (Prometheus, opcional) y `GET /health` + `GET /ready`.
+- **Descubrimiento**: cada réplica se registra ante Consul (opt-in con `CONSUL_HTTP_ADDR`) y anuncia su routing Traefik como tags del registro; sin Consul, la app arranca igual.
 - **Seguridad**: mensajes de error acotados; nunca se propagan detalles internos ni bytes del documento.
 
 ## Arquitectura
@@ -31,7 +32,9 @@ uv sync --dev
 
 ## Configuración
 
-Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
+Variables de entorno (ver `.env.example`): las de la aplicación usan prefijo
+`PDFEXTRACTOR_`; las de Consul usan sus nombres canónicos (`CONSUL_HTTP_ADDR`
+por convención del cliente) o el prefijo `EXTRACTOR_` del despliegue.
 
 | Variable | Valor por defecto | Descripción |
 |---|---|---|
@@ -50,6 +53,16 @@ Variables de entorno (ver `.env.example`), todas con prefijo `PDFEXTRACTOR_`:
 | `PDFEXTRACTOR_METRICS_ENABLED` | `true` | Monta `GET /metrics` |
 | `PDFEXTRACTOR_METRICS_CACHE_TTL_SECONDS` | `1.0` | Cache de la exposición Prometheus: una tormenta de scrapes colapsa en un render por TTL (`0` desactiva la cache) |
 | `PDFEXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
+| `CONSUL_HTTP_ADDR` | *(vacía)* | Habilita el registro de la réplica ante el agente Consul (p. ej. `http://consul:8500` en `mired`). **Vacía = sin registro**: dev local, tests e integración por etapas corren sin Consul y sin ruido |
+| `EXTRACTOR_ADVERTISE_ADDR` | *(autodetección)* | IP que la réplica anuncia en `mired`; por defecto, la primera IPv4 no loopback del contenedor. Fijarla solo si el contenedor tiene varias redes |
+| `EXTRACTOR_ENTRYPOINT` | `https` | Entrypoint del router en las tags `traefik.*` del registro Consul (`http` para barridos sin TLS) |
+| `EXTRACTOR_TLS` | `true` | TLS del router en las tags del registro |
+| `PDFEXTRACTOR_CONSUL_CHECK_INTERVAL_SECONDS` | `3.0` | Intervalo del check de Consul sobre `/ready` (10 s para el experimento comparativo de la tarea 12 del plan de integración) |
+| `PDFEXTRACTOR_CONSUL_CHECK_TIMEOUT_SECONDS` | `1.0` | Timeout del check de Consul (debe quedar por debajo del intervalo) |
+| `PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS` | `60.0` | Ventana tras la cual Consul retira sola una réplica en estado crítico (proceso muerto sin desregistro) |
+| `PDFEXTRACTOR_CONSUL_HTTP_TIMEOUT_SECONDS` | `2.0` | Timeout acotado de las llamadas al agente (registro/desregistro) |
+| `PDFEXTRACTOR_CONSUL_BACKOFF_INITIAL_SECONDS` | `1.0` | Retardo inicial del reintento de registro en background |
+| `PDFEXTRACTOR_CONSUL_BACKOFF_MAX_SECONDS` | `30.0` | Tope del backoff creciente del reintento (1 s → ×2 → 30 s) |
 
 ## Ejecución
 
@@ -154,7 +167,7 @@ docker build -t pdfextractor:ci .    # build de la imagen
 ## Despliegue
 
 - **Proxy inverso (Nginx/Ingress):** `proxy_request_buffering off` para no spoolear el upload.
-- **Health checks:** `/health` para liveness, `/ready` para readiness (refleja overload).
+- **Health checks:** `/health` para liveness, `/ready` para readiness (solo cae a `503` con la instancia incapacitada; rechazar carga con `503 overloaded` es degradación sana y no degrada el readiness).
 - **Escalado:** el límite de memoria lo fija `PDFEXTRACTOR_MAX_UPLOAD_BYTES` × `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`, ambos configurables.
 - **Oversubscription de `uvicorn --workers N`:** cada worker de uvicorn es un proceso independiente y crea **su propio** process pool de `PDFEXTRACTOR_WORKERS` workers (por defecto, uno por CPU). Con `--workers N` el total de procesos de extracción es `N × workers_del_pool` — un footgun de memoria/rendimiento si ambos se sobredimensionan. Configuración recomendada: un solo worker uvicorn con `PDFEXTRACTOR_WORKERS` = CPUs, **o** varios workers uvicorn (`N`) con `PDFEXTRACTOR_WORKERS = 1` y escalado horizontal por réplicas de contenedor (el tope de concurrencia por proceso lo sigue fijando `PDFEXTRACTOR_MAX_CONCURRENT_EXTRACTIONS`). No hay código que compense esto: queda explícito en la configuración del operador.
 
@@ -214,9 +227,11 @@ y cero timeouts.
 
 ### Despliegue con Docker Compose
 
-`docker-compose.yml` define **solo** los recursos del Extractor (el Orquestador y Traefik viven
-aparte). Requisitos: la red externa **`mired` debe existir** (`docker network create mired`; el
-Compose no la crea ni la destruye) y una instancia de Traefik con Docker provider apuntando a ella.
+`docker-compose.yml` define **solo** los recursos del Extractor (el Orquestador, Consul y Traefik
+viven aparte). Requisitos: la red externa **`mired` debe existir** (`docker network create mired`;
+el Compose no la crea ni la destruye), un **Consul** alcanzable como `consul:8500` en `mired`
+(stack del Orquestador) y una instancia de Traefik con el provider **Consul Catalog** apuntando a
+él (mismos requisitos que antes para el provider Docker: `exposedByDefault=false`).
 
 ```bash
 docker network create mired                 # una vez por host
@@ -230,12 +245,16 @@ docker compose down                         # quita el stack
   mismo router y el mismo servicio de Traefik: round-robin, sin sticky.
 - **Sin `ports:`**: el puerto 9000 no se publica al host; Traefik entra por `mired`. La red
   `mired` es **externa** (`external: true`).
-- **Healthcheck de Docker** con `start_period=30s`: mientras el pool de extracción calienta, la
-  réplica queda en `starting` y el Docker provider de Traefik **no le enruta tráfico** (sin esto,
-  un *rolling deploy* produce `502` por réplicas calientes).
+- **Sin labels `traefik.*`**: el routing ya no vive en el Compose; cada réplica lo anuncia como
+  tags de su registro Consul (ver la sección siguiente).
+- **Healthcheck de Docker** con `start_period=30s`: mientras el pool de extracción calienta, el
+  contenedor queda en `starting`. Además, la réplica se registra en Consul **después** del
+  warmup, así que una réplica caliente no entra al catálogo (y por tanto al balanceo) hasta
+  estar lista: un *rolling deploy* no produce `502` por réplicas calientes.
 - **Variables**: `EXTRACTOR_IMAGE`, `EXTRACTOR_REPLICAS`, `EXTRACTOR_WORKERS`,
   `EXTRACTOR_MAX_CONCURRENT`, `EXTRACTOR_MAX_INFLIGHT` (puerta), `EXTRACTOR_QUEUE_TIMEOUT`,
-  `EXTRACTOR_STOP_GRACE_PERIOD`, `TRAEFIK_NETWORK`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS`
+  `EXTRACTOR_STOP_GRACE_PERIOD`, `TRAEFIK_NETWORK`, `CONSUL_HTTP_ADDR`,
+  `EXTRACTOR_ADVERTISE_ADDR`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS`
   (ver `.env.example`).
 
 **Medido con este despliegue (400 rps mixtos, `N = 7`, Traefik delante, 8 vCPU / 3.8 GB):**
@@ -255,14 +274,70 @@ real es **una réplica por host**. Detalle y análisis en [`docs/report.md`](doc
 > desborda → el kernel tira los SYN → el cliente entra en *backoff* y ve timeouts que **no** son
 > del servicio. Si el LB comparte host con la app, reservale CPU (o ponlo en otro host).
 
-### Integración con Traefik
+### Registro en Consul (descubrimiento de réplicas)
 
-- **Router**: un solo router por servicio, compartido por todas las réplicas (por eso el despliegue **no** fija `container_name` ni publica `ports:`; las réplicas se descubren por el Docker provider de Traefik en la red externa `mired`).
-- **Balanceo**: round-robin, **sin sticky sessions** (el servicio es stateless). Regla de host típica: `Host(\`extractor.universidad.localhost\`)`, tal como trae el Compose; el servicio se expone en el puerto interno `9000`.
-- **Healthcheck del balanceador**: `GET /health` (liveness; aislado del downstream), con `interval=10s` y `timeout=3s`.
-- **Readiness**: `GET /ready` devuelve `200`/`503` según el estado de la instancia; un `503` debe sacar la réplica del balanceo (no solo del healthcheck).
-- **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`. Ojo: Traefik **no** reintenta respuestas `5xx` ni `POST` con cuerpo (`retryNonIdempotentMethod`), así que el retry **no** es garantía de reejecución en otra réplica.
-- **Red**: `mired` es **externa** (`external: true`); no la crea ni la destruye el despliegue del extractor.
-- **Versión de Traefik**: con **Docker Engine 29.x** hace falta **Traefik v3.7** (`traefik:v3.7.16`): `v3.5` usa un cliente de la API de Docker 1.24 y el daemon 29.x exige ≥ 1.40 → el Docker provider falla y **todo** el tráfico al router devuelve `404`. No es un problema del Compose ni de los labels.
+Cada réplica se registra por sí misma ante el agente Consul (`CONSUL_HTTP_ADDR`,
+por defecto `http://consul:8500` en `mired`) mediante la API HTTP del agente,
+sin dependencias runtime nuevas (`urllib` despachado con `asyncio.to_thread` y
+timeouts acotados). El registro ocurre tras el warmup del pool, en una tarea en
+background del lifespan.
+
+- **Identidad**: ID único por réplica (`extractor-<hostname>-<aleatorio>`) y la
+  IP propia del contenedor en `mired` (`EXTRACTOR_ADVERTISE_ADDR` si hay varias
+  redes; si no, autodetección de la primera IPv4 no loopback). El nombre de
+  servicio compartido es `extractor`, con el puerto de la app (`9000`).
+- **Check de Consul**: `GET /ready` cada **3 s** con timeout de **1 s**. `/ready`
+  solo cae a `503` cuando la instancia está incapacitada; rechazar carga con
+  `503 overloaded` no lo degrada (hay un test que fija esa secuencia), así que
+  Consul **no retira réplicas bajo carga** (evita el efecto cascada).
+- **Limpieza**: una réplica crítica durante 1 minuto
+  (`PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS`) sale del catálogo
+  sola — cubre el proceso muerto sin desregistro.
+- **Resiliencia**: si Consul no está al arrancar, la app levanta igual y
+  reintenta el registro en background con backoff creciente (1 s → ×2 → tope
+  30 s). Sin `CONSUL_HTTP_ADDR` (dev local `uv run`, tests, integración por
+  etapas) no hay registro ni intentos.
+- **Cierre ordenado**: al apagar (`SIGTERM`, dentro de `stop_grace_period=35s`)
+  se cancela el reintento, se desregistra la réplica **antes** de cerrar el
+  pool y, si Consul no responde, solo se loguea (queda la limpieza crítica).
+  Implementación: `src/pdfextractor/infrastructure/discovery/consul.py`.
+
+### Integración con Traefik (Consul Catalog)
+
+- **Descubrimiento**: Traefik ya no usa el Docker provider para este servicio.
+  Cada réplica lleva las tags `traefik.*` en su registro Consul y el provider
+  **Consul Catalog** las convierte en routers/servicios. Con
+  `exposedByDefault=false`, la tag `traefik.enable=true` es obligatoria:
+  sin ella Traefik ignora el servicio.
+- **Tags** (idénticas entre réplicas, definidas en
+  `build_traefik_tags`): router con
+  `Host(\`extractor.universidad.localhost\`)`, entrypoint/TLS configurables
+  (`EXTRACTOR_ENTRYPOINT`/`EXTRACTOR_TLS`), servicio balanceado en el puerto
+  de la app, healthcheck del balanceador sobre `GET /health`
+  (`interval=10s`, `timeout=3s`) y middleware `extractor-retry`. La tag
+  `traefik.docker.network` desapareció: solo aplicaba al Docker provider.
+- **Balanceo**: round-robin, **sin sticky sessions** (el servicio es
+  stateless). Las réplicas comparten nombre de servicio `extractor`, por eso
+  el despliegue no fija `container_name` y se escala con `--scale`.
+- **Readiness**: el check de Consul sondea `/ready` (3 s/1 s). Un `503`
+  persistente (instancia incapacitada) saca la réplica del catálogo y del
+  balanceo; la ventana de reacción completa es checks (3 s) + `refreshInterval`
+  del provider (5 s) + throttle de Traefik (2 s) ≈ 10 s.
+- **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`.
+  Ojo: Traefik **no** reintenta respuestas `5xx` ni `POST` con cuerpo
+  (`retryNonIdempotentMethod`), así que el retry **no** es garantía de
+  reejecución en otra réplica.
+- **Red**: `mired` es **externa** (`external: true`); no la crea ni la destruye
+  el despliegue del extractor.
+- **Versión de Traefik**: el stack externo declara `traefik:v3.7.12`. Con
+  **Docker Engine 29.x** hace falta Traefik v3.7 para el provider Docker (que
+  el stack externo sigue usando para la UI de Consul): `v3.5` usa un cliente
+  de la API de Docker 1.24 y el daemon 29.x exige ≥ 1.40 → ese provider falla.
+
+> **Nota sobre `load-tests/sweep-replicas.sh`**: ese arnés levanta un Traefik
+> desechable con **Docker provider** y dependía de los labels `traefik.*` del
+> Compose, que ya no existen. Queda fuera de servicio tal cual; la medición
+> comparativa de la tarea 12 del plan de integración se hará contra el stack
+> real (Traefik + Consul Catalog) en el entorno del Orquestador.
 
 Guía de validación extremo a extremo con el Orquestador: [`docs/integration.md`](docs/integration.md).
