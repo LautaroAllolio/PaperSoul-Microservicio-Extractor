@@ -3,9 +3,10 @@
 The ``pdfextractor.http`` logger records every request with the contract fields
 (``request_id``, ``duration_ms``, ``bytes``, ``pages``, ``method``, ``outcome``,
 ``error_type``) as ``extra``; the formatter renders them into one JSON line.
-The ``pdfextractor.pool`` logger shares the same JSON stream for lifecycle
-events (e.g. the start-up warm-up). Document content can never reach a record:
-the middleware only forwards fields parked on the request scope, and nothing
+The ``pdfextractor.pool`` and ``pdfextractor.consul`` loggers share the same
+JSON stream for lifecycle events (e.g. the start-up warm-up, the background
+Consul registration). Document content can never reach a record: the
+middleware only forwards fields parked on the request scope, and nothing
 downstream ever puts bytes or filenames into ``extra``.
 
 Since TASK-28 the write is off the event loop: the app loggers enqueue records
@@ -29,7 +30,7 @@ __all__ = [
     "shutdown_logging",
 ]
 
-_LOGGERS = ("pdfextractor.http", "pdfextractor.pool")
+_LOGGERS = ("pdfextractor.http", "pdfextractor.pool", "pdfextractor.consul")
 
 _FIELDS = (
     "request_id",
