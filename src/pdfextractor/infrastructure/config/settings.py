@@ -2,8 +2,9 @@
 
 import os
 from functools import lru_cache
+from typing import Self
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_ignore_empty=True,
         extra="ignore",
+        populate_by_name=True,
     )
 
     host: str = "0.0.0.0"
@@ -40,6 +42,28 @@ class Settings(BaseSettings):
     warmup: bool = True
     metrics_enabled: bool = True
     log_level: str = "INFO"
+
+    # Consul registration (plan tasks 7-8). ``CONSUL_HTTP_ADDR`` follows the
+    # convention of the Consul client instead of the app prefix and opts the
+    # replica into registration: unset/empty means "no Consul" (local dev,
+    # tests, staged integration) and the app runs exactly as before.
+    consul_addr: str | None = Field(default=None, validation_alias="CONSUL_HTTP_ADDR")
+    # Address this replica advertises in `mired`; empty = autodetect the first
+    # non-loopback IPv4 (set it explicitly when the container has many networks).
+    advertise_addr: str | None = Field(default=None, validation_alias="EXTRACTOR_ADVERTISE_ADDR")
+    # Traefik router tags: entrypoint/TLS of the deployment (https + the static
+    # wildcard cert by default; the load sweeps used http/false).
+    traefik_entrypoint: str = Field(default="https", validation_alias="EXTRACTOR_ENTRYPOINT")
+    traefik_tls: bool = Field(default=True, validation_alias="EXTRACTOR_TLS")
+    # Consul check contract: /ready every 3 s with a 1 s timeout, and a
+    # replica stuck critical for a minute is removed from the catalog. The
+    # knobs stay configurable so the task-12 experiment can repeat with 10 s.
+    consul_check_interval_seconds: float = 3.0
+    consul_check_timeout_seconds: float = 1.0
+    consul_deregister_critical_after_seconds: float = 60.0
+    consul_http_timeout_seconds: float = 2.0
+    consul_backoff_initial_seconds: float = 1.0
+    consul_backoff_max_seconds: float = 30.0
 
     @field_validator("port")
     @classmethod
@@ -104,6 +128,54 @@ class Settings(BaseSettings):
         if normalized not in _LOG_LEVELS:
             raise ValueError(f"log_level must be one of {sorted(_LOG_LEVELS)}")
         return normalized
+
+    @field_validator("consul_addr")
+    @classmethod
+    def _validate_consul_addr(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("consul_addr (CONSUL_HTTP_ADDR) must be an http(s) URL")
+        return normalized
+
+    @field_validator("advertise_addr")
+    @classmethod
+    def _validate_advertise_addr(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("traefik_entrypoint")
+    @classmethod
+    def _validate_traefik_entrypoint(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("traefik_entrypoint must not be empty")
+        return normalized
+
+    @field_validator(
+        "consul_check_interval_seconds",
+        "consul_check_timeout_seconds",
+        "consul_deregister_critical_after_seconds",
+        "consul_http_timeout_seconds",
+        "consul_backoff_initial_seconds",
+        "consul_backoff_max_seconds",
+    )
+    @classmethod
+    def _validate_consul_durations(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("consul duration must be greater than 0")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_consul_check_shape(self) -> Self:
+        if self.consul_check_timeout_seconds >= self.consul_check_interval_seconds:
+            raise ValueError("consul check timeout must be less than the check interval")
+        if self.consul_backoff_max_seconds < self.consul_backoff_initial_seconds:
+            raise ValueError("consul_backoff_max_seconds must not be below the initial delay")
+        return self
 
     @property
     def effective_workers(self) -> int:

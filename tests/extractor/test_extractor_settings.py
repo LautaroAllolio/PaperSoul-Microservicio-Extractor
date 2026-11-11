@@ -77,6 +77,76 @@ def test_the_example_env_file_loads_without_error(tmp_path: Path) -> None:
     assert settings.workers is None
     assert settings.max_concurrent_extractions == 7
     assert settings.port == 9000
+    assert settings.consul_addr == "http://consul:8500"
+    assert settings.advertise_addr is None
+
+
+def test_consul_settings_default_to_registration_disabled() -> None:
+    settings = Settings()
+
+    assert settings.consul_addr is None
+    assert settings.advertise_addr is None
+    assert settings.traefik_entrypoint == "https"
+    assert settings.traefik_tls is True
+    assert settings.consul_check_interval_seconds == 3
+    assert settings.consul_check_timeout_seconds == 1
+    assert settings.consul_deregister_critical_after_seconds == 60
+    assert settings.consul_http_timeout_seconds == 2
+    assert settings.consul_backoff_initial_seconds == 1
+    assert settings.consul_backoff_max_seconds == 30
+
+
+def test_consul_addr_is_read_from_its_canonical_env_name(monkeypatch) -> None:
+    monkeypatch.setenv("CONSUL_HTTP_ADDR", "http://consul:8500")
+
+    assert Settings().consul_addr == "http://consul:8500"
+
+
+def test_an_empty_consul_addr_keeps_registration_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("CONSUL_HTTP_ADDR", "")
+
+    assert Settings().consul_addr is None
+
+
+def test_consul_addr_requires_an_http_scheme(monkeypatch) -> None:
+    monkeypatch.setenv("CONSUL_HTTP_ADDR", "consul:8500")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_advertise_addr_entrypoint_and_tls_are_read_from_extractor_env(monkeypatch) -> None:
+    monkeypatch.setenv("EXTRACTOR_ADVERTISE_ADDR", "10.0.0.7")
+    monkeypatch.setenv("EXTRACTOR_ENTRYPOINT", "http")
+    monkeypatch.setenv("EXTRACTOR_TLS", "false")
+
+    settings = Settings()
+
+    assert settings.advertise_addr == "10.0.0.7"
+    assert settings.traefik_entrypoint == "http"
+    assert settings.traefik_tls is False
+
+
+def test_consul_knobs_are_read_with_the_application_prefix(monkeypatch) -> None:
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_CHECK_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS", "90")
+
+    settings = Settings()
+
+    assert settings.consul_check_interval_seconds == 10
+    assert settings.consul_deregister_critical_after_seconds == 90
+
+
+def test_the_check_timeout_must_stay_below_the_check_interval() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(consul_check_interval_seconds=1, consul_check_timeout_seconds=1)
+
+    assert "check timeout" in str(exc_info.value)
+
+
+def test_the_backoff_cap_cannot_undercut_the_initial_delay() -> None:
+    with pytest.raises(ValidationError):
+        Settings(consul_backoff_initial_seconds=30, consul_backoff_max_seconds=1)
 
 
 @pytest.mark.parametrize(
@@ -93,6 +163,17 @@ def test_the_example_env_file_loads_without_error(tmp_path: Path) -> None:
         ({"max_extracted_chars": -1}, "max_extracted_chars"),
         ({"port": 70_000}, "port"),
         ({"log_level": "verbose"}, "log_level"),
+        ({"consul_addr": "consul:8500"}, "consul_addr"),
+        ({"consul_check_interval_seconds": 0}, "consul_check_interval_seconds"),
+        ({"consul_check_timeout_seconds": -1}, "consul_check_timeout_seconds"),
+        (
+            {"consul_deregister_critical_after_seconds": 0},
+            "consul_deregister_critical_after_seconds",
+        ),
+        ({"consul_http_timeout_seconds": 0}, "consul_http_timeout_seconds"),
+        ({"consul_backoff_initial_seconds": 0}, "consul_backoff_initial_seconds"),
+        ({"consul_backoff_max_seconds": -1}, "consul_backoff_max_seconds"),
+        ({"traefik_entrypoint": " "}, "traefik_entrypoint"),
     ],
 )
 def test_invalid_settings_are_rejected_with_a_clear_message(
