@@ -10,8 +10,8 @@ que devuelve el texto extraído.
 
 | Aspecto | Valor |
 |---|---|
-| Variable en el orquestador | `EXTRACTOR_URL` (requerida al arrancar) |
-| Base URL de despliegue | `http://extractor:9000` (nombre de servicio `extractor`, puerto `9000`) |
+| Descubrimiento en el orquestador | `DISCOVERY=consul` + `CONSUL_HTTP_ADDR=http://consul:8500` (los Compose lo fijan); `EXTRACTOR_URL` solo se usa con `DISCOVERY=static` |
+| Base URL de despliegue | Descubierta de Consul: servicio `extractor`, puerto `9000` |
 | Endpoint del extractor | `POST /api/v1/extractions` |
 | Tipo de request | `multipart/form-data`: campos `checksum` (primer), `file`; header `X-Document-Checksum` |
 | Correlación | Se honra `X-Correlation-Id` (fallback `X-Request-Id`) y se ecoa |
@@ -35,11 +35,11 @@ sea válido (200 con texto vacío), como espera el orquestador.
 
 ## Levantar el stack (orquestador + extractor)
 
-El orquestador exige sus downstream al arrancar (`EXTRACTOR_URL` y
-`PERSISTENCE_URL`). Para que la red del compose resuelva el nombre `extractor`,
-el servicio debe llamarse `extractor` y estar en la misma red que el orquestador.
-Fragmento de referencia para el compose del stack (NO modifica el repo del
-orquestador):
+Con `DISCOVERY=consul` el orquestador no usa URLs fijas: descubre
+`extractor` y `persistencia` en el catálogo de Consul y solo considera las
+instancias `passing`. Ambos servicios y el agente Consul deben estar en la red
+`mired`. Fragmento de referencia para el compose del stack (NO modifica el repo
+del orquestador):
 
 ```yaml
 services:
@@ -49,14 +49,16 @@ services:
     environment:
       PDFEXTRACTOR_PORT: 9000
       PDFEXTRACTOR_MIN_TEXT_LENGTH: "0"
+      PDFEXTRACTOR_CONSUL_ENABLED: "true"
+      PDFEXTRACTOR_CONSUL_HTTP_ADDR: http://consul:8500
     networks:
       - mired
 
   orchestrator:
     # ... imagen del orquestador ...
     environment:
-      EXTRACTOR_URL: http://extractor:9000
-      PERSISTENCE_URL: http://<persistencia>:<puerto>
+      DISCOVERY: consul
+      CONSUL_HTTP_ADDR: http://consul:8500
     networks:
       - mired
 ```

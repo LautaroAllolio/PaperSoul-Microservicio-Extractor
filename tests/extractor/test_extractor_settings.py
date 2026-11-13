@@ -67,7 +67,10 @@ def test_settings_ignores_env_without_prefix(monkeypatch) -> None:
     assert settings.max_upload_bytes == 52_428_800
 
 
-def test_the_example_env_file_loads_without_error(tmp_path: Path) -> None:
+def test_the_example_env_file_loads_without_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PDFEXTRACTOR_CONSUL_ENABLED", raising=False)
     example = Path(__file__).resolve().parents[2] / ".env.example"
     target = tmp_path / ".env"
     target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
@@ -77,15 +80,29 @@ def test_the_example_env_file_loads_without_error(tmp_path: Path) -> None:
     assert settings.workers is None
     assert settings.max_concurrent_extractions == 7
     assert settings.port == 9000
-    assert settings.consul_addr == "http://consul:8500"
-    assert settings.advertise_addr is None
+    assert settings.consul_enabled is True
+    assert settings.consul_http_addr == "http://consul:8500"
+    assert settings.consul_service_name == "extractor"
+    assert settings.consul_service_port is None
+    assert settings.consul_service_id is None
+    assert settings.consul_advertise_addr is None
+    assert settings.effective_consul_service_port == 9000
 
 
-def test_consul_settings_default_to_registration_disabled() -> None:
+def test_consul_settings_default_to_the_orchestrator_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PDFEXTRACTOR_CONSUL_ENABLED", raising=False)
+
     settings = Settings()
 
-    assert settings.consul_addr is None
-    assert settings.advertise_addr is None
+    assert settings.consul_enabled is True
+    assert settings.consul_http_addr == "http://consul:8500"
+    assert settings.consul_service_name == "extractor"
+    assert settings.consul_service_port is None
+    assert settings.consul_service_id is None
+    assert settings.consul_advertise_addr is None
+    assert settings.effective_consul_service_port == settings.port
     assert settings.traefik_entrypoint == "https"
     assert settings.traefik_tls is True
     assert settings.consul_check_interval_seconds == 3
@@ -96,33 +113,54 @@ def test_consul_settings_default_to_registration_disabled() -> None:
     assert settings.consul_backoff_max_seconds == 30
 
 
-def test_consul_addr_is_read_from_its_canonical_env_name(monkeypatch) -> None:
+def test_consul_http_addr_is_read_from_the_orchestrator_env(monkeypatch) -> None:
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_ENABLED", "false")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_HTTP_ADDR", "http://127.0.0.1:8501")
+
+    settings = Settings()
+
+    assert settings.consul_enabled is False
+    assert settings.consul_http_addr == "http://127.0.0.1:8501"
+
+
+def test_legacy_consul_env_names_are_still_accepted(monkeypatch) -> None:
     monkeypatch.setenv("CONSUL_HTTP_ADDR", "http://consul:8500")
+    monkeypatch.setenv("EXTRACTOR_ADVERTISE_ADDR", "10.0.0.7")
 
-    assert Settings().consul_addr == "http://consul:8500"
+    settings = Settings()
 
-
-def test_an_empty_consul_addr_keeps_registration_disabled(monkeypatch) -> None:
-    monkeypatch.setenv("CONSUL_HTTP_ADDR", "")
-
-    assert Settings().consul_addr is None
+    assert settings.consul_http_addr == "http://consul:8500"
+    assert settings.consul_advertise_addr == "10.0.0.7"
 
 
-def test_consul_addr_requires_an_http_scheme(monkeypatch) -> None:
-    monkeypatch.setenv("CONSUL_HTTP_ADDR", "consul:8500")
+def test_consul_service_identity_is_read_with_the_application_prefix(monkeypatch) -> None:
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_SERVICE_NAME", "extractor-alt")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_SERVICE_PORT", "9100")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_SERVICE_ID", "extractor-fixed-id")
+
+    settings = Settings()
+
+    assert settings.consul_service_name == "extractor-alt"
+    assert settings.consul_service_port == 9100
+    assert settings.consul_service_id == "extractor-fixed-id"
+    assert settings.effective_consul_service_port == 9100
+
+
+def test_consul_http_addr_requires_an_http_scheme(monkeypatch) -> None:
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_HTTP_ADDR", "consul:8500")
 
     with pytest.raises(ValidationError):
         Settings()
 
 
 def test_advertise_addr_entrypoint_and_tls_are_read_from_extractor_env(monkeypatch) -> None:
-    monkeypatch.setenv("EXTRACTOR_ADVERTISE_ADDR", "10.0.0.7")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR", "10.0.0.7")
     monkeypatch.setenv("EXTRACTOR_ENTRYPOINT", "http")
     monkeypatch.setenv("EXTRACTOR_TLS", "false")
 
     settings = Settings()
 
-    assert settings.advertise_addr == "10.0.0.7"
+    assert settings.consul_advertise_addr == "10.0.0.7"
     assert settings.traefik_entrypoint == "http"
     assert settings.traefik_tls is False
 
@@ -163,7 +201,9 @@ def test_the_backoff_cap_cannot_undercut_the_initial_delay() -> None:
         ({"max_extracted_chars": -1}, "max_extracted_chars"),
         ({"port": 70_000}, "port"),
         ({"log_level": "verbose"}, "log_level"),
-        ({"consul_addr": "consul:8500"}, "consul_addr"),
+        ({"consul_http_addr": "consul:8500"}, "consul_http_addr"),
+        ({"consul_service_name": " "}, "consul_service_name"),
+        ({"consul_service_port": 70_000}, "consul_service_port"),
         ({"consul_check_interval_seconds": 0}, "consul_check_interval_seconds"),
         ({"consul_check_timeout_seconds": -1}, "consul_check_timeout_seconds"),
         (

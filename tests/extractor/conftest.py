@@ -13,17 +13,19 @@ def _disable_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
 
     The warm-up spawns ``forkserver`` workers at start-up; exercising it in
     every app-creating test adds tens of seconds. The TASK-26 tests opt back
-    in with an explicit ``Settings(warmup=True)``. ``CONSUL_HTTP_ADDR`` is
-    removed the same way so a developer shell (or a local ``.env``) cannot
-    leak a live agent into the tests; the client fixture pins it to None too.
+    in with an explicit ``Settings(warmup=True)``. Consul registration is
+    disabled the same way so a developer shell (or a local ``.env``) cannot
+    leak a live agent into the tests; the client fixture disables it too.
     """
     monkeypatch.setenv("PDFEXTRACTOR_WARMUP", "false")
+    monkeypatch.setenv("PDFEXTRACTOR_CONSUL_ENABLED", "false")
+    monkeypatch.delenv("PDFEXTRACTOR_CONSUL_HTTP_ADDR", raising=False)
     monkeypatch.delenv("CONSUL_HTTP_ADDR", raising=False)
 
 
 @pytest.fixture
 async def client():
-    app = create_app(Settings(workers=1, consul_addr=None))
+    app = create_app(Settings(workers=1, consul_enabled=False))
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

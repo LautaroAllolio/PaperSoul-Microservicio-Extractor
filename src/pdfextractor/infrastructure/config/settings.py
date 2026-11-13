@@ -4,7 +4,7 @@ import os
 from functools import lru_cache
 from typing import Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
@@ -43,14 +43,29 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     log_level: str = "INFO"
 
-    # Consul registration (plan tasks 7-8). ``CONSUL_HTTP_ADDR`` follows the
-    # convention of the Consul client instead of the app prefix and opts the
-    # replica into registration: unset/empty means "no Consul" (local dev,
-    # tests, staged integration) and the app runs exactly as before.
-    consul_addr: str | None = Field(default=None, validation_alias="CONSUL_HTTP_ADDR")
+    # Consul registration (plan tasks 7-8). The Orchestrator's Compose sets the
+    # PDFEXTRACTOR_* names below; the legacy CONSUL_HTTP_ADDR and
+    # EXTRACTOR_ADVERTISE_ADDR names are still accepted for local .env files.
+    consul_enabled: bool = True
+    consul_http_addr: str = Field(
+        default="http://consul:8500",
+        validation_alias=AliasChoices(
+            "PDFEXTRACTOR_CONSUL_HTTP_ADDR",
+            "CONSUL_HTTP_ADDR",
+        ),
+    )
+    consul_service_name: str = "extractor"
+    consul_service_port: int | None = None
+    consul_service_id: str | None = None
     # Address this replica advertises in `mired`; empty = autodetect the first
     # non-loopback IPv4 (set it explicitly when the container has many networks).
-    advertise_addr: str | None = Field(default=None, validation_alias="EXTRACTOR_ADVERTISE_ADDR")
+    consul_advertise_addr: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR",
+            "EXTRACTOR_ADVERTISE_ADDR",
+        ),
+    )
     # Traefik router tags: entrypoint/TLS of the deployment (https + the static
     # wildcard cert by default; the load sweeps used http/false).
     traefik_entrypoint: str = Field(default="https", validation_alias="EXTRACTOR_ENTRYPOINT")
@@ -129,19 +144,34 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {sorted(_LOG_LEVELS)}")
         return normalized
 
-    @field_validator("consul_addr")
+    @field_validator("consul_http_addr")
     @classmethod
-    def _validate_consul_addr(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def _validate_consul_http_addr(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized.startswith(("http://", "https://")):
-            raise ValueError("consul_addr (CONSUL_HTTP_ADDR) must be an http(s) URL")
+            raise ValueError(
+                "consul_http_addr (PDFEXTRACTOR_CONSUL_HTTP_ADDR) must be an http(s) URL"
+            )
         return normalized
 
-    @field_validator("advertise_addr")
+    @field_validator("consul_service_name")
     @classmethod
-    def _validate_advertise_addr(cls, value: str | None) -> str | None:
+    def _validate_consul_service_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("consul_service_name must not be empty")
+        return normalized
+
+    @field_validator("consul_service_port")
+    @classmethod
+    def _validate_consul_service_port(cls, value: int | None) -> int | None:
+        if value is not None and not 1 <= value <= 65_535:
+            raise ValueError("consul_service_port must be between 1 and 65535")
+        return value
+
+    @field_validator("consul_service_id", "consul_advertise_addr")
+    @classmethod
+    def _validate_optional_consul_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
@@ -186,6 +216,11 @@ class Settings(BaseSettings):
     def effective_max_concurrent_extractions(self) -> int:
         """Concurrency gate: explicit value or the worker count."""
         return self.max_concurrent_extractions or self.effective_workers
+
+    @property
+    def effective_consul_service_port(self) -> int:
+        """Port announced to Consul: the explicit override or the HTTP port."""
+        return self.consul_service_port or self.port
 
     @property
     def effective_max_inflight_requests(self) -> int:

@@ -120,8 +120,8 @@ async def test_the_app_serves_while_consul_is_unavailable() -> None:
     assert registrar.deregistered is True
 
 
-async def test_registration_stays_silent_without_consul_addr() -> None:
-    app = create_app(Settings(workers=1, consul_addr=None))
+async def test_registration_stays_silent_when_consul_is_disabled() -> None:
+    app = create_app(Settings(workers=1, consul_enabled=False))
 
     async with app.router.lifespan_context(app):
         assert app.state.consul_registrar is None
@@ -134,7 +134,7 @@ async def test_the_registrar_is_built_from_settings_when_consul_is_enabled(
     registrar = _FakeRegistrar()
     monkeypatch.setattr("pdfextractor.main.build_registrar", lambda settings: registrar)
 
-    app = create_app(Settings(workers=1, consul_addr="http://consul:8500"))
+    app = create_app(Settings(workers=1, consul_enabled=True))
     async with app.router.lifespan_context(app):
         await asyncio.sleep(0)
         assert app.state.consul_registrar is registrar

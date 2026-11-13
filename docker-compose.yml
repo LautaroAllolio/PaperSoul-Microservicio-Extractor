@@ -7,9 +7,9 @@
 # fija `container_name`, así que se pueden levantar varias réplicas.
 #
 # El routing ya NO vive en labels Docker: cada réplica se registra ante el
-# agente Consul (CONSUL_HTTP_ADDR) con tags `traefik.*` idénticas entre réplicas
-# — un único router y un único servicio (compartidos) con balanceo y
-# healthcheck. Ver `src/pdfextractor/infrastructure/discovery/consul.py`.
+# agente Consul (PDFEXTRACTOR_CONSUL_HTTP_ADDR) con tags `traefik.*` idénticas
+# entre réplicas — un único router y un único servicio (compartidos) con
+# balanceo y healthcheck. Ver `src/pdfextractor/infrastructure/discovery/consul.py`.
 name: papersoul-extractor
 
 services:
@@ -38,13 +38,20 @@ services:
       PDFEXTRACTOR_LOG_LEVEL: ${PDFEXTRACTOR_LOG_LEVEL:-INFO}
       # --- Registro en Consul (tareas 7 y 8 del plan de integración) ---------
       # Habilita el registro de la réplica ante el agente Consul (API HTTP en
-      # `mired`). Sin Consul (vacía) la réplica arranca igual y reintenta en
-      # background: sirve para dev local sin Docker e integración por etapas.
-      CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-http://consul:8500}
+      # `mired`). Con enabled=false la réplica arranca igual y no registra:
+      # sirve para dev local sin Docker e integración por etapas.
+      PDFEXTRACTOR_CONSUL_ENABLED: ${PDFEXTRACTOR_CONSUL_ENABLED:-true}
+      PDFEXTRACTOR_CONSUL_HTTP_ADDR: ${PDFEXTRACTOR_CONSUL_HTTP_ADDR:-http://consul:8500}
+      # Identidad anunciada: el nombre debe coincidir con el que busca el
+      # Orquestador (`extractor`). Puerto vacío = PDFEXTRACTOR_PORT; ID vacío =
+      # nombre + hostname + puerto.
+      PDFEXTRACTOR_CONSUL_SERVICE_NAME: ${PDFEXTRACTOR_CONSUL_SERVICE_NAME:-extractor}
+      PDFEXTRACTOR_CONSUL_SERVICE_PORT: ${PDFEXTRACTOR_CONSUL_SERVICE_PORT:-}
+      PDFEXTRACTOR_CONSUL_SERVICE_ID: ${PDFEXTRACTOR_CONSUL_SERVICE_ID:-}
       # IP que la réplica anuncia en `mired`. Vacía = autodetección de la
       # primera IPv4 no loopback; fijarla solo si el contenedor tiene varias
       # redes.
-      EXTRACTOR_ADVERTISE_ADDR: ${EXTRACTOR_ADVERTISE_ADDR:-}
+      PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR: ${PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR:-}
       # Tags traefik.* del registro: entrypoint y TLS del router (el Compose
       # las pasa a la app; ya no interpolan labels del contenedor).
       EXTRACTOR_ENTRYPOINT: ${EXTRACTOR_ENTRYPOINT:-https}

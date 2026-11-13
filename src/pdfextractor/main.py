@@ -72,8 +72,8 @@ def create_app(
     ``settings`` is accepted so a caller (a test, an embedding app) can hand
     over a resolved configuration; omitted, it comes from the environment.
     ``registrar`` injects a registration double for tests; omitted, it is
-    built from the settings when ``CONSUL_HTTP_ADDR`` is set (without it the
-    app never talks to Consul).
+    built from the settings when ``PDFEXTRACTOR_CONSUL_ENABLED`` is true
+    (disabled, the app never talks to Consul).
     """
     resolved = get_settings() if settings is None else settings
     configure_logging(resolved.log_level)
@@ -113,7 +113,7 @@ def create_app(
         app.state.warmup = await _warmup(extractor, enabled=resolved.warmup)
         # Consul registration (plan tasks 7-8): a background task that never
         # blocks startup and retries with a growing delay while the agent is
-        # unavailable. ``None`` when CONSUL_HTTP_ADDR is unset.
+        # unavailable. ``None`` when PDFEXTRACTOR_CONSUL_ENABLED is false.
         active_registrar = registrar if registrar is not None else build_registrar(resolved)
         app.state.consul_registrar = active_registrar
         registration_task: asyncio.Task[None] | None = None

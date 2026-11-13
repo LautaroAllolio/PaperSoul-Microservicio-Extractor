@@ -41,7 +41,7 @@ EXPECTED_TAGS = [
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {"port": 9000}
+    base: dict[str, object] = {"port": 9000, "consul_enabled": True}
     base.update(overrides)
     return Settings(**base)
 
@@ -116,13 +116,31 @@ def test_the_lb_port_follows_the_application_port() -> None:
     assert "traefik.http.services.extractor.loadbalancer.server.port=9123" in tags
 
 
-def test_service_ids_are_unique_per_replica() -> None:
-    first = build_service_id()
-    second = build_service_id()
+def test_service_name_and_consul_port_override_the_registration() -> None:
+    settings = _settings(consul_service_name="extractor-alt", consul_service_port=9100)
 
-    assert first != second
-    assert first.startswith("extractor-")
-    assert second.startswith("extractor-")
+    payload = build_registration_payload(settings, service_id="custom", address="10.0.0.7")
+
+    assert payload["Name"] == "extractor-alt"
+    assert payload["Port"] == 9100
+    check = payload["Check"]
+    assert isinstance(check, dict)
+    assert check["HTTP"] == "http://10.0.0.7:9100/ready"
+    tags = payload["Tags"]
+    assert isinstance(tags, list)
+    assert any("services.extractor-alt" in tag for tag in tags)
+
+
+def test_service_id_is_deterministic_per_replica(monkeypatch) -> None:
+    monkeypatch.setattr(socket, "gethostname", lambda: "replica-1")
+
+    assert build_service_id(_settings()) == "extractor-replica-1-9000"
+
+
+def test_service_id_can_be_overridden_explicitly() -> None:
+    settings = _settings(consul_service_id="extractor-fixed-id")
+
+    assert build_service_id(settings) == "extractor-fixed-id"
 
 
 def test_registration_payload_matches_the_agent_service_api_contract() -> None:
@@ -177,33 +195,37 @@ def test_detect_advertise_addr_returns_the_first_non_loopback_ipv4(
     assert detect_advertise_addr() == "172.18.0.9"
 
 
-def test_detect_advertise_addr_falls_back_to_loopback_when_unresolvable(
+def test_detect_advertise_addr_falls_back_to_hostname_when_unresolvable(
     monkeypatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def raise_gaierror(*_: object, **__: object) -> list:
         raise socket.gaierror("unresolvable hostname")
 
+    monkeypatch.setattr(socket, "gethostname", lambda: "extractor-replica")
     monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
 
     with caplog.at_level(logging.WARNING, logger="pdfextractor.consul"):
-        assert detect_advertise_addr() == "127.0.0.1"
+        assert detect_advertise_addr() == "extractor-replica"
 
     assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
-def test_build_registrar_returns_none_without_consul_addr() -> None:
-    assert build_registrar(_settings()) is None
+def test_build_registrar_returns_none_when_consul_is_disabled() -> None:
+    assert build_registrar(_settings(consul_enabled=False)) is None
 
 
 def test_build_registrar_uses_the_explicit_advertise_address() -> None:
     registrar = build_registrar(
-        _settings(consul_addr="http://consul:8500", advertise_addr="10.0.0.7")
+        _settings(
+            consul_http_addr="http://consul:8500",
+            consul_advertise_addr="10.0.0.7",
+        )
     )
 
     assert isinstance(registrar, ConsulRegistrar)
     assert registrar.payload["Address"] == "10.0.0.7"
     assert registrar.payload["Port"] == 9000
-    assert registrar.service_id.startswith("extractor-")
+    assert registrar.service_id == f"extractor-{socket.gethostname()}-9000"
 
 
 def test_build_registrar_autodetects_the_address_when_unset(monkeypatch) -> None:
@@ -212,11 +234,13 @@ def test_build_registrar_autodetects_the_address_when_unset(monkeypatch) -> None
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
-    registrar = build_registrar(_settings(consul_addr="http://consul:8500"))
+    registrar = build_registrar(_settings(consul_http_addr="http://consul:8500"))
 
     assert isinstance(registrar, ConsulRegistrar)
     assert registrar.payload["Address"] == "172.18.0.9"
-    assert registrar.payload["Check"]["HTTP"] == "http://172.18.0.9:9000/ready"
+    check = registrar.payload["Check"]
+    assert isinstance(check, dict)
+    assert check["HTTP"] == "http://172.18.0.9:9000/ready"
 
 
 async def test_register_puts_the_payload_on_the_agent_api() -> None:

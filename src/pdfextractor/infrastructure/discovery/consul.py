@@ -8,6 +8,13 @@ used to live in Docker labels on the Compose service moves into
 the router, the load-balanced service and the retry middleware, so every
 replica of the service advertises identical tags.
 
+The Orchestrator's Compose configures the registration with
+``PDFEXTRACTOR_CONSUL_ENABLED`` and ``PDFEXTRACTOR_CONSUL_HTTP_ADDR``; the
+legacy ``CONSUL_HTTP_ADDR`` and ``EXTRACTOR_ADVERTISE_ADDR`` names remain as
+aliases. Consul checks ``/ready`` while Traefik's load-balancer health check
+uses ``/health``: shedding load with ``503 overloaded`` must not evict a
+replica from the catalog.
+
 If Consul is unavailable the application still boots: registration is a
 background coroutine that retries with a growing delay, and an ordered
 shutdown deregisters the replica. A replica that dies without deregistering
@@ -21,7 +28,6 @@ import asyncio
 import json
 import logging
 import socket
-import uuid
 from collections.abc import Callable, Mapping
 from urllib.parse import quote
 from urllib.request import Request as UrlRequest
@@ -31,7 +37,6 @@ from pdfextractor.infrastructure.config.settings import Settings
 
 __all__ = [
     "ConsulRegistrar",
-    "SERVICE_NAME",
     "build_registration_payload",
     "build_registrar",
     "build_service_id",
@@ -41,8 +46,6 @@ __all__ = [
 ]
 
 _LOGGER = logging.getLogger("pdfextractor.consul")
-
-SERVICE_NAME = "extractor"
 
 TRAEFIK_HOST_RULE = "Host(`extractor.universidad.localhost`)"
 
@@ -59,10 +62,11 @@ def detect_advertise_addr() -> str:
 
     Resolving the container hostname answers with the container's own IPs;
     when several networks are attached, pin the right one with
-    ``EXTRACTOR_ADVERTISE_ADDR`` instead of relying on this order.
+    ``PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR`` instead of relying on this order.
     """
+    hostname = socket.gethostname() or "local"
     try:
-        infos = socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)
+        infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET)
     except OSError:
         infos = []
     for info in infos:
@@ -70,15 +74,19 @@ def detect_advertise_addr() -> str:
         if not address.startswith("127."):
             return address
     _LOGGER.warning(
-        "no non-loopback IPv4 found; advertising 127.0.0.1",
+        "no non-loopback IPv4 found; advertising hostname %s",
+        hostname,
         extra={"error_type": "AdvertiseAddrDetectionError"},
     )
-    return "127.0.0.1"
+    return hostname
 
 
-def build_service_id(service_name: str = SERVICE_NAME) -> str:
-    """Service ID unique per replica: container hostname plus a random suffix."""
-    return f"{service_name}-{socket.gethostname()}-{uuid.uuid4().hex[:12]}"
+def build_service_id(settings: Settings) -> str:
+    """Service ID unique per replica: service name, hostname and announced port."""
+    if settings.consul_service_id:
+        return settings.consul_service_id
+    hostname = socket.gethostname() or "local"
+    return f"{settings.consul_service_name}-{hostname}-{settings.effective_consul_service_port}"
 
 
 def build_traefik_tags(settings: Settings) -> list[str]:
@@ -90,18 +98,20 @@ def build_traefik_tags(settings: Settings) -> list[str]:
     check on ``/health`` and the bounded retry middleware keep the same
     configuration the labels carried, so the public routes do not change.
     """
+    service = settings.consul_service_name
+    port = settings.effective_consul_service_port
     return [
         "traefik.enable=true",
-        f"traefik.http.routers.{SERVICE_NAME}.entrypoints={settings.traefik_entrypoint}",
-        f"traefik.http.routers.{SERVICE_NAME}.rule={TRAEFIK_HOST_RULE}",
-        f"traefik.http.routers.{SERVICE_NAME}.tls={'true' if settings.traefik_tls else 'false'}",
-        f"traefik.http.routers.{SERVICE_NAME}.middlewares={SERVICE_NAME}-retry",
-        f"traefik.http.services.{SERVICE_NAME}.loadbalancer.server.port={settings.port}",
-        f"traefik.http.services.{SERVICE_NAME}.loadbalancer.healthcheck.path=/health",
-        f"traefik.http.services.{SERVICE_NAME}.loadbalancer.healthcheck.interval=10s",
-        f"traefik.http.services.{SERVICE_NAME}.loadbalancer.healthcheck.timeout=3s",
-        f"traefik.http.middlewares.{SERVICE_NAME}-retry.retry.attempts=2",
-        f"traefik.http.middlewares.{SERVICE_NAME}-retry.retry.initialinterval=500ms",
+        f"traefik.http.routers.{service}.entrypoints={settings.traefik_entrypoint}",
+        f"traefik.http.routers.{service}.rule={TRAEFIK_HOST_RULE}",
+        f"traefik.http.routers.{service}.tls={'true' if settings.traefik_tls else 'false'}",
+        f"traefik.http.routers.{service}.middlewares={service}-retry",
+        f"traefik.http.services.{service}.loadbalancer.server.port={port}",
+        f"traefik.http.services.{service}.loadbalancer.healthcheck.path=/health",
+        f"traefik.http.services.{service}.loadbalancer.healthcheck.interval=10s",
+        f"traefik.http.services.{service}.loadbalancer.healthcheck.timeout=3s",
+        f"traefik.http.middlewares.{service}-retry.retry.attempts=2",
+        f"traefik.http.middlewares.{service}-retry.retry.initialinterval=500ms",
     ]
 
 
@@ -115,14 +125,15 @@ def build_registration_payload(
     503 when the instance is incapacitated, so Consul never pulls healthy
     replicas out of the catalog under load (cascading effect).
     """
+    port = settings.effective_consul_service_port
     return {
         "ID": service_id,
-        "Name": SERVICE_NAME,
+        "Name": settings.consul_service_name,
         "Address": address,
-        "Port": settings.port,
+        "Port": port,
         "Tags": build_traefik_tags(settings),
         "Check": {
-            "HTTP": f"http://{address}:{settings.port}/ready",
+            "HTTP": f"http://{address}:{port}/ready",
             "Interval": _go_duration(settings.consul_check_interval_seconds),
             "Timeout": _go_duration(settings.consul_check_timeout_seconds),
             "DeregisterCriticalServiceAfter": _go_duration(
@@ -142,7 +153,7 @@ def urllib_request_json(url: str, payload: Mapping[str, object] | None, timeout:
         headers={"Content-Type": "application/json"},
     )
     with urlopen(request, timeout=timeout) as response:
-        if response.status != 200:
+        if not 200 <= response.status < 300:
             raise RuntimeError(f"consul answered HTTP {response.status}")
 
 
@@ -252,16 +263,17 @@ class ConsulRegistrar:
 def build_registrar(settings: Settings) -> ConsulRegistrar | None:
     """Wire the registrar from settings; ``None`` when registration is off.
 
-    Registration is opt-in: without ``CONSUL_HTTP_ADDR`` (local development,
-    tests, staged integration) the app runs exactly as before and never
-    talks to Consul.
+    The Orchestrator enables it with ``PDFEXTRACTOR_CONSUL_ENABLED=true`` and
+    ``PDFEXTRACTOR_CONSUL_HTTP_ADDR``; local development, tests and staged
+    integration can set ``PDFEXTRACTOR_CONSUL_ENABLED=false`` to run exactly
+    as before and never talk to Consul.
     """
-    if settings.consul_addr is None:
+    if not settings.consul_enabled:
         return None
-    service_id = build_service_id()
-    address = settings.advertise_addr or detect_advertise_addr()
+    service_id = build_service_id(settings)
+    address = settings.consul_advertise_addr or detect_advertise_addr()
     return ConsulRegistrar(
-        consul_addr=settings.consul_addr,
+        consul_addr=settings.consul_http_addr,
         service_id=service_id,
         payload=build_registration_payload(settings, service_id=service_id, address=address),
         http_timeout_seconds=settings.consul_http_timeout_seconds,

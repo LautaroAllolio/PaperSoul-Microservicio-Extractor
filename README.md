@@ -9,7 +9,7 @@ Microservicio FastAPI de extracción **PDF → JSON**: recibe un PDF por `multip
 - **Límites**: tamaño máximo de upload, timeout de cola y timeout de extracción configurables.
 - **Correlación**: header `X-Request-Id` (se hereda o se genera) y logs JSON estructurados.
 - **Observabilidad**: `GET /metrics` (Prometheus, opcional) y `GET /health` + `GET /ready`.
-- **Descubrimiento**: cada réplica se registra ante Consul (opt-in con `CONSUL_HTTP_ADDR`) y anuncia su routing Traefik como tags del registro; sin Consul, la app arranca igual.
+- **Descubrimiento**: cada réplica se registra ante Consul (`PDFEXTRACTOR_CONSUL_ENABLED`) y anuncia su routing Traefik como tags del registro; deshabilitado, la app arranca igual.
 - **Seguridad**: mensajes de error acotados; nunca se propagan detalles internos ni bytes del documento.
 
 ## Arquitectura
@@ -32,9 +32,9 @@ uv sync --dev
 
 ## Configuración
 
-Variables de entorno (ver `.env.example`): las de la aplicación usan prefijo
-`PDFEXTRACTOR_`; las de Consul usan sus nombres canónicos (`CONSUL_HTTP_ADDR`
-por convención del cliente) o el prefijo `EXTRACTOR_` del despliegue.
+Variables de entorno (ver `.env.example`): las de la aplicación y las de
+Consul usan prefijo `PDFEXTRACTOR_`. Se aceptan como aliases legacy
+`CONSUL_HTTP_ADDR` y `EXTRACTOR_ADVERTISE_ADDR`.
 
 | Variable | Valor por defecto | Descripción |
 |---|---|---|
@@ -53,8 +53,12 @@ por convención del cliente) o el prefijo `EXTRACTOR_` del despliegue.
 | `PDFEXTRACTOR_METRICS_ENABLED` | `true` | Monta `GET /metrics` |
 | `PDFEXTRACTOR_METRICS_CACHE_TTL_SECONDS` | `1.0` | Cache de la exposición Prometheus: una tormenta de scrapes colapsa en un render por TTL (`0` desactiva la cache) |
 | `PDFEXTRACTOR_LOG_LEVEL` | `INFO` | Nivel de logs |
-| `CONSUL_HTTP_ADDR` | *(vacía)* | Habilita el registro de la réplica ante el agente Consul (p. ej. `http://consul:8500` en `mired`). **Vacía = sin registro**: dev local, tests e integración por etapas corren sin Consul y sin ruido |
-| `EXTRACTOR_ADVERTISE_ADDR` | *(autodetección)* | IP que la réplica anuncia en `mired`; por defecto, la primera IPv4 no loopback del contenedor. Fijarla solo si el contenedor tiene varias redes |
+| `PDFEXTRACTOR_CONSUL_ENABLED` | `true` | Habilita el registro de la réplica ante el agente Consul. `false` = sin registro: dev local, tests e integración por etapas corren sin Consul y sin ruido |
+| `PDFEXTRACTOR_CONSUL_HTTP_ADDR` | `http://consul:8500` | URL del agente Consul en `mired` (alias legacy: `CONSUL_HTTP_ADDR`) |
+| `PDFEXTRACTOR_CONSUL_SERVICE_NAME` | `extractor` | Nombre del servicio que busca el Orquestador en el catálogo |
+| `PDFEXTRACTOR_CONSUL_SERVICE_PORT` | *(= `PDFEXTRACTOR_PORT`)* | Puerto anunciado en el registro y en las tags Traefik |
+| `PDFEXTRACTOR_CONSUL_SERVICE_ID` | *(derivado)* | ID fijo opcional; por defecto `extractor-<hostname>-<puerto>` |
+| `PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR` | *(autodetección)* | IP que la réplica anuncia en `mired`; por defecto, la primera IPv4 no loopback del contenedor (alias legacy: `EXTRACTOR_ADVERTISE_ADDR`). Fijarla solo si el contenedor tiene varias redes |
 | `EXTRACTOR_ENTRYPOINT` | `https` | Entrypoint del router en las tags `traefik.*` del registro Consul (`http` para barridos sin TLS) |
 | `EXTRACTOR_TLS` | `true` | TLS del router en las tags del registro |
 | `PDFEXTRACTOR_CONSUL_CHECK_INTERVAL_SECONDS` | `3.0` | Intervalo del check de Consul sobre `/ready` (10 s para el experimento comparativo de la tarea 12 del plan de integración) |
@@ -253,8 +257,10 @@ docker compose down                         # quita el stack
   estar lista: un *rolling deploy* no produce `502` por réplicas calientes.
 - **Variables**: `EXTRACTOR_IMAGE`, `EXTRACTOR_REPLICAS`, `EXTRACTOR_WORKERS`,
   `EXTRACTOR_MAX_CONCURRENT`, `EXTRACTOR_MAX_INFLIGHT` (puerta), `EXTRACTOR_QUEUE_TIMEOUT`,
-  `EXTRACTOR_STOP_GRACE_PERIOD`, `TRAEFIK_NETWORK`, `CONSUL_HTTP_ADDR`,
-  `EXTRACTOR_ADVERTISE_ADDR`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS`
+  `EXTRACTOR_STOP_GRACE_PERIOD`, `TRAEFIK_NETWORK`, `PDFEXTRACTOR_CONSUL_ENABLED`,
+  `PDFEXTRACTOR_CONSUL_HTTP_ADDR`, `PDFEXTRACTOR_CONSUL_SERVICE_NAME`,
+  `PDFEXTRACTOR_CONSUL_SERVICE_PORT`, `PDFEXTRACTOR_CONSUL_SERVICE_ID`,
+  `PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR`, `EXTRACTOR_ENTRYPOINT`, `EXTRACTOR_TLS`
   (ver `.env.example`).
 
 **Medido con este despliegue (400 rps mixtos, `N = 7`, Traefik delante, 8 vCPU / 3.8 GB):**
@@ -276,27 +282,31 @@ real es **una réplica por host**. Detalle y análisis en [`docs/report.md`](doc
 
 ### Registro en Consul (descubrimiento de réplicas)
 
-Cada réplica se registra por sí misma ante el agente Consul (`CONSUL_HTTP_ADDR`,
-por defecto `http://consul:8500` en `mired`) mediante la API HTTP del agente,
-sin dependencias runtime nuevas (`urllib` despachado con `asyncio.to_thread` y
-timeouts acotados). El registro ocurre tras el warmup del pool, en una tarea en
-background del lifespan.
+Cada réplica se registra por sí misma ante el agente Consul
+(`PDFEXTRACTOR_CONSUL_HTTP_ADDR`, por defecto `http://consul:8500` en `mired`)
+mediante la API HTTP del agente, sin dependencias runtime nuevas (`urllib`
+despachado con `asyncio.to_thread` y timeouts acotados). El registro ocurre
+tras el warmup del pool, en una tarea en background del lifespan.
 
-- **Identidad**: ID único por réplica (`extractor-<hostname>-<aleatorio>`) y la
-  IP propia del contenedor en `mired` (`EXTRACTOR_ADVERTISE_ADDR` si hay varias
-  redes; si no, autodetección de la primera IPv4 no loopback). El nombre de
-  servicio compartido es `extractor`, con el puerto de la app (`9000`).
+- **Identidad**: ID determinístico por réplica
+  (`extractor-<hostname>-<puerto>`, o `PDFEXTRACTOR_CONSUL_SERVICE_ID` si se
+  fija) y la IP propia del contenedor en `mired`
+  (`PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR` si hay varias redes; si no,
+  autodetección de la primera IPv4 no loopback, con el hostname como fallback).
+  El nombre de servicio compartido es `extractor`, con el puerto de la app
+  (`9000`) salvo override.
 - **Check de Consul**: `GET /ready` cada **3 s** con timeout de **1 s**. `/ready`
   solo cae a `503` cuando la instancia está incapacitada; rechazar carga con
   `503 overloaded` no lo degrada (hay un test que fija esa secuencia), así que
-  Consul **no retira réplicas bajo carga** (evita el efecto cascada).
+  Consul **no retira réplicas bajo carga** (evita el efecto cascada). El
+  healthcheck de Traefik sigue usando `/health`.
 - **Limpieza**: una réplica crítica durante 1 minuto
   (`PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS`) sale del catálogo
   sola — cubre el proceso muerto sin desregistro.
 - **Resiliencia**: si Consul no está al arrancar, la app levanta igual y
   reintenta el registro en background con backoff creciente (1 s → ×2 → tope
-  30 s). Sin `CONSUL_HTTP_ADDR` (dev local `uv run`, tests, integración por
-  etapas) no hay registro ni intentos.
+  30 s). Con `PDFEXTRACTOR_CONSUL_ENABLED=false` (dev local `uv run`, tests,
+  integración por etapas) no hay registro ni intentos.
 - **Cierre ordenado**: al apagar (`SIGTERM`, dentro de `stop_grace_period=35s`)
   se cancela el reintento, se desregistra la réplica **antes** de cerrar el
   pool y, si Consul no responde, solo se loguea (queda la limpieza crítica).
