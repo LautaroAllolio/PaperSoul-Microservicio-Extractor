@@ -165,7 +165,9 @@ uv run mypy -p pdfextractor
 uv run pytest -q
 uv run pytest -m memory -q           # techo de memoria (RSS)
 uv run --with pip-audit pip-audit    # escaneo de vulnerabilidades
-docker build -t pdfextractor:ci .    # build de la imagen
+docker build --build-arg VERSION=ci \
+  --build-arg REVISION="$(git rev-parse --short HEAD)" \
+  -t pdfextractor:ci .               # build de la imagen
 ```
 
 ## Despliegue
@@ -237,10 +239,16 @@ el Compose no la crea ni la destruye), un **Consul** alcanzable como `consul:850
 (stack del Orquestador) y una instancia de Traefik con el provider **Consul Catalog** apuntando a
 él (mismos requisitos que antes para el provider Docker: `exposedByDefault=false`).
 
+La imagen no se compila desde el Compose: `EXTRACTOR_IMAGE` es obligatoria y debe apuntar a una
+versión concreta. Construila primero y después levantá las réplicas:
+
 ```bash
 docker network create mired                 # una vez por host
-docker compose up -d --build                # 3 réplicas (EXTRACTOR_REPLICAS)
-docker compose up -d --scale extractor=5    # o escalar en caliente
+docker build --build-arg VERSION=v1.0.0 \
+  --build-arg REVISION="$(git rev-parse --short HEAD)" \
+  -t pdfextractor:v1.0.0 .
+EXTRACTOR_IMAGE=pdfextractor:v1.0.0 docker compose up -d            # 3 réplicas (EXTRACTOR_REPLICAS)
+EXTRACTOR_IMAGE=pdfextractor:v1.0.0 docker compose up -d --scale extractor=5  # o escalar en caliente
 docker compose down                         # quita el stack
 ```
 

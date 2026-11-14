@@ -14,8 +14,9 @@ name: papersoul-extractor
 
 services:
   extractor:
-    build: .
-    image: ${EXTRACTOR_IMAGE:-pdfextractor:local}
+    # La imagen no se construye acá: EXTRACTOR_IMAGE es obligatoria y debe
+    # apuntar a una versión concreta (ver README §Despliegue con Docker Compose).
+    image: ${EXTRACTOR_IMAGE:?Definí EXTRACTOR_IMAGE con una versión concreta (p. ej. pdfextractor:v1.0.0)}
     restart: unless-stopped
     environment:
       # Escucha en todas las interfaces del contenedor: Traefik llega por la red

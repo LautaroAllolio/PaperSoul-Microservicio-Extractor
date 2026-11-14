@@ -23,10 +23,12 @@ que devuelve el texto extraído.
 
 ## Imagen Docker del extractor
 
-Construir desde la raíz de este repositorio:
+Construir desde la raíz de este repositorio con una versión concreta:
 
 ```bash
-docker build -t pdfextractor:latest .
+docker build --build-arg VERSION=v1.0.0 \
+  --build-arg REVISION="$(git rev-parse --short HEAD)" \
+  -t pdfextractor:v1.0.0 .
 ```
 
 La imagen escucha en `:9000` (`PDFEXTRACTOR_PORT=9000`) y trae configurado
@@ -44,7 +46,7 @@ del orquestador):
 ```yaml
 services:
   extractor:
-    image: pdfextractor:latest
+    image: pdfextractor:v1.0.0
     restart: unless-stopped
     environment:
       PDFEXTRACTOR_PORT: 9000
@@ -63,8 +65,8 @@ services:
       - mired
 ```
 
-```
-docker compose up --build
+```bash
+EXTRACTOR_IMAGE=pdfextractor:v1.0.0 docker compose up -d
 ```
 
 ## 1. Revisar logs de ambos contenedores

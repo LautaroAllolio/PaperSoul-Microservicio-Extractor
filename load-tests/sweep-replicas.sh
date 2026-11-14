@@ -60,6 +60,10 @@ EXTRACTOR_WORKERS="${EXTRACTOR_WORKERS:-7}"
 EXTRACTOR_MAX_CONCURRENT="${EXTRACTOR_MAX_CONCURRENT:-7}"
 EXTRACTOR_QUEUE_TIMEOUT="${EXTRACTOR_QUEUE_TIMEOUT:-2}"
 EXTRACTOR_MAX_UPLOAD_BYTES="${EXTRACTOR_MAX_UPLOAD_BYTES:-1048576}"
+# El Compose no construye la imagen (EXTRACTOR_IMAGE es obligatoria): el barrido
+# usa un tag efímero propio, igual que el `pdfextractor:ci` del workflow.
+EXTRACTOR_IMAGE="${EXTRACTOR_IMAGE:-pdfextractor:sweep}"
+export EXTRACTOR_IMAGE
 
 LB_PORT="${LB_PORT:-18080}"
 LB_API_PORT="${LB_API_PORT:-18081}"
@@ -318,8 +322,11 @@ run_one() {
 
 ensure_network
 write_lb_targets
-log "building the image"
-docker compose -f "${REPO_ROOT}/docker-compose.yml" build >/dev/null
+log "building the image (${EXTRACTOR_IMAGE})"
+docker build \
+  --build-arg VERSION=sweep \
+  --build-arg REVISION="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+  -t "${EXTRACTOR_IMAGE}" "${REPO_ROOT}" >/dev/null
 
 mkdir -p "${OUT_DIR}"
 for k in ${SWEEP_REPLICAS}; do
