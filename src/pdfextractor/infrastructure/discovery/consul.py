@@ -1,8 +1,8 @@
 """Consul registration for the Extractor (plan tasks 7 and 8).
 
 Each replica registers itself with the Consul agent HTTP API — an ID and
-address of its own, the ``/ready`` health check every 3 s (timeout 1 s) and
-cleanup after one minute in critical state — and the Traefik routing that
+address of its own, the ``/health`` liveness check every 3 s (timeout 1 s)
+and cleanup after one minute in critical state — and the Traefik routing that
 used to live in Docker labels on the Compose service moves into
 ``traefik.*`` tags on that registration. Consul Catalog turns the tags into
 the router, the load-balanced service and the retry middleware, so every
@@ -11,9 +11,10 @@ replica of the service advertises identical tags.
 The Orchestrator's Compose configures the registration with
 ``PDFEXTRACTOR_CONSUL_ENABLED`` and ``PDFEXTRACTOR_CONSUL_HTTP_ADDR``; the
 legacy ``CONSUL_HTTP_ADDR`` and ``EXTRACTOR_ADVERTISE_ADDR`` names remain as
-aliases. Consul checks ``/ready`` while Traefik's load-balancer health check
-uses ``/health``: shedding load with ``503 overloaded`` must not evict a
-replica from the catalog.
+aliases. Consul checks ``/health`` (liveness), the same probe Traefik's
+load-balancer health check uses: it always answers 200, so shedding load with
+``503 overloaded`` never evicts a healthy replica from the catalog. ``/ready``
+is not used on purpose: it flips to 503 under overload.
 
 If Consul is unavailable the application still boots: registration is a
 background coroutine that retries with a growing delay, and an ordered
@@ -120,10 +121,12 @@ def build_registration_payload(
 ) -> dict[str, object]:
     """Body of ``PUT /v1/agent/service/register`` (Consul Agent Service API).
 
-    ``/ready`` is the check on purpose: the contract pins that it stays 200
-    while the instance sheds load with ``503 overloaded`` and only falls to
-    503 when the instance is incapacitated, so Consul never pulls healthy
-    replicas out of the catalog under load (cascading effect).
+    ``/health`` is the check on purpose: it always answers 200 without
+    touching a dependency, so shedding load with ``503 overloaded`` never
+    pulls a healthy replica out of the catalog. ``/ready`` is not used: it
+    flips to 503 under overload, and the registrar only registers once, so a
+    service removed by ``DeregisterCriticalServiceAfter`` would not come back
+    until the replica restarts (cascading effect).
     """
     port = settings.effective_consul_service_port
     return {
@@ -133,7 +136,7 @@ def build_registration_payload(
         "Port": port,
         "Tags": build_traefik_tags(settings),
         "Check": {
-            "HTTP": f"http://{address}:{port}/ready",
+            "HTTP": f"http://{address}:{port}/health",
             "Interval": _go_duration(settings.consul_check_interval_seconds),
             "Timeout": _go_duration(settings.consul_check_timeout_seconds),
             "DeregisterCriticalServiceAfter": _go_duration(

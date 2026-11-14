@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # wildcard cert by default; the load sweeps used http/false).
     traefik_entrypoint: str = Field(default="https", validation_alias="EXTRACTOR_ENTRYPOINT")
     traefik_tls: bool = Field(default=True, validation_alias="EXTRACTOR_TLS")
-    # Consul check contract: /ready every 3 s with a 1 s timeout, and a
+    # Consul check contract: /health every 3 s with a 1 s timeout, and a
     # replica stuck critical for a minute is removed from the catalog. The
     # knobs stay configurable so the task-12 experiment can repeat with 10 s.
     consul_check_interval_seconds: float = 3.0

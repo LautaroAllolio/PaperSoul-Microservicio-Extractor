@@ -1,7 +1,7 @@
 """Consul registration for the Extractor (plan tasks 7 and 8).
 
 Each replica registers itself with the Consul agent HTTP API — an ID/address
-of its own, the ``/ready`` health check every 3 s (timeout 1 s) and cleanup
+of its own, the ``/health`` liveness check every 3 s (timeout 1 s) and cleanup
 after one minute critical — and the Traefik routing that used to live in
 Docker labels on the Compose service moves into ``traefik.*`` tags on the
 registration. The transport is stdlib ``urllib`` behind ``asyncio.to_thread``,
@@ -125,7 +125,7 @@ def test_service_name_and_consul_port_override_the_registration() -> None:
     assert payload["Port"] == 9100
     check = payload["Check"]
     assert isinstance(check, dict)
-    assert check["HTTP"] == "http://10.0.0.7:9100/ready"
+    assert check["HTTP"] == "http://10.0.0.7:9100/health"
     tags = payload["Tags"]
     assert isinstance(tags, list)
     assert any("services.extractor-alt" in tag for tag in tags)
@@ -155,7 +155,7 @@ def test_registration_payload_matches_the_agent_service_api_contract() -> None:
     assert payload["Tags"] == EXPECTED_TAGS
     check = payload["Check"]
     assert isinstance(check, dict)
-    assert check["HTTP"] == "http://10.0.0.7:9000/ready"
+    assert check["HTTP"] == "http://10.0.0.7:9000/health"
     assert check["Interval"] == "3s"
     assert check["Timeout"] == "1s"
     assert check["DeregisterCriticalServiceAfter"] == "60s"
@@ -240,7 +240,7 @@ def test_build_registrar_autodetects_the_address_when_unset(monkeypatch) -> None
     assert registrar.payload["Address"] == "172.18.0.9"
     check = registrar.payload["Check"]
     assert isinstance(check, dict)
-    assert check["HTTP"] == "http://172.18.0.9:9000/ready"
+    assert check["HTTP"] == "http://172.18.0.9:9000/health"
 
 
 async def test_register_puts_the_payload_on_the_agent_api() -> None:

@@ -4,9 +4,10 @@ The lifespan owns the registration like any other process-wide resource: it
 starts a background task that retries while Consul is unavailable (the app
 never blocks on it), and an ordered shutdown cancels the task and deregisters
 the replica before closing the pool. The last test pins the readiness
-semantics the Consul check relies on: ``/ready`` stays 200 while the instance
-sheds load with ``503 overloaded`` and only falls to 503 when the instance is
-incapacitated, so a replica under load is never pulled out of the catalog.
+semantics: ``/ready`` stays 200 while the instance sheds load with
+``503 overloaded`` and only falls to 503 when the instance is incapacitated.
+Consul does not use ``/ready`` for the catalog check; it uses ``/health``,
+which always answers 200.
 """
 
 import asyncio
@@ -170,7 +171,7 @@ async def test_ready_stays_200_under_overload_and_503_only_when_incapacitated() 
         assert rejected.status_code == 503
         assert rejected.json() == {"error": "overloaded"}
 
-        # The Consul check polls /ready: shedding load must not evict the replica.
+        # Readiness only: shedding load must not flip /ready to 503.
         shedding = await client.get("/ready")
         assert shedding.status_code == 200, "shedding load is a healthy degradation"
 

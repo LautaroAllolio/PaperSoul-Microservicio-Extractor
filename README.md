@@ -61,7 +61,7 @@ Consul usan prefijo `PDFEXTRACTOR_`. Se aceptan como aliases legacy
 | `PDFEXTRACTOR_CONSUL_ADVERTISE_ADDR` | *(autodetección)* | IP que la réplica anuncia en `mired`; por defecto, la primera IPv4 no loopback del contenedor (alias legacy: `EXTRACTOR_ADVERTISE_ADDR`). Fijarla solo si el contenedor tiene varias redes |
 | `EXTRACTOR_ENTRYPOINT` | `https` | Entrypoint del router en las tags `traefik.*` del registro Consul (`http` para barridos sin TLS) |
 | `EXTRACTOR_TLS` | `true` | TLS del router en las tags del registro |
-| `PDFEXTRACTOR_CONSUL_CHECK_INTERVAL_SECONDS` | `3.0` | Intervalo del check de Consul sobre `/ready` (10 s para el experimento comparativo de la tarea 12 del plan de integración) |
+| `PDFEXTRACTOR_CONSUL_CHECK_INTERVAL_SECONDS` | `3.0` | Intervalo del check de Consul sobre `/health` (10 s para el experimento comparativo de la tarea 12 del plan de integración) |
 | `PDFEXTRACTOR_CONSUL_CHECK_TIMEOUT_SECONDS` | `1.0` | Timeout del check de Consul (debe quedar por debajo del intervalo) |
 | `PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS` | `60.0` | Ventana tras la cual Consul retira sola una réplica en estado crítico (proceso muerto sin desregistro) |
 | `PDFEXTRACTOR_CONSUL_HTTP_TIMEOUT_SECONDS` | `2.0` | Timeout acotado de las llamadas al agente (registro/desregistro) |
@@ -295,11 +295,13 @@ tras el warmup del pool, en una tarea en background del lifespan.
   autodetección de la primera IPv4 no loopback, con el hostname como fallback).
   El nombre de servicio compartido es `extractor`, con el puerto de la app
   (`9000`) salvo override.
-- **Check de Consul**: `GET /ready` cada **3 s** con timeout de **1 s**. `/ready`
-  solo cae a `503` cuando la instancia está incapacitada; rechazar carga con
-  `503 overloaded` no lo degrada (hay un test que fija esa secuencia), así que
-  Consul **no retira réplicas bajo carga** (evita el efecto cascada). El
-  healthcheck de Traefik sigue usando `/health`.
+- **Check de Consul**: `GET /health` cada **3 s** con timeout de **1 s**.
+  `/health` siempre responde `200` sin tocar dependencias, así que rechazar
+  carga con `503 overloaded` no saca la réplica del catálogo (evita el efecto
+  cascada). No se usa `/ready`: baja a `503` por sobrecarga y el registro se
+  hace una sola vez, así que un `DeregisterCriticalServiceAfter` la dejaría
+  fuera hasta reiniciar la réplica. El healthcheck de Traefik usa el mismo
+  `/health`.
 - **Limpieza**: una réplica crítica durante 1 minuto
   (`PDFEXTRACTOR_CONSUL_DEREGISTER_CRITICAL_AFTER_SECONDS`) sale del catálogo
   sola — cubre el proceso muerto sin desregistro.
@@ -329,10 +331,11 @@ tras el warmup del pool, en una tarea en background del lifespan.
 - **Balanceo**: round-robin, **sin sticky sessions** (el servicio es
   stateless). Las réplicas comparten nombre de servicio `extractor`, por eso
   el despliegue no fija `container_name` y se escala con `--scale`.
-- **Readiness**: el check de Consul sondea `/ready` (3 s/1 s). Un `503`
-  persistente (instancia incapacitada) saca la réplica del catálogo y del
-  balanceo; la ventana de reacción completa es checks (3 s) + `refreshInterval`
-  del provider (5 s) + throttle de Traefik (2 s) ≈ 10 s.
+- **Readiness**: el check de Consul sondea `/health` (3 s/1 s), que siempre
+  responde `200`; una réplica realmente muerta deja de responder y Consul la
+  retira tras `DeregisterCriticalServiceAfter` (60 s). La ventana de reacción
+  por caída es checks (3 s) + `refreshInterval` del provider (5 s) + throttle
+  de Traefik (2 s) ≈ 10 s.
 - **Retry**: middleware de Traefik con `attempts=2` e `initialInterval=500ms`.
   Ojo: Traefik **no** reintenta respuestas `5xx` ni `POST` con cuerpo
   (`retryNonIdempotentMethod`), así que el retry **no** es garantía de
